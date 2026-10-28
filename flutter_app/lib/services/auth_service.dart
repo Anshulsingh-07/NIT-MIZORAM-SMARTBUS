@@ -1,7 +1,12 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
+import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/models.dart';
 import 'api_service.dart';
+
+enum AuthCheckResult { authenticated, unauthenticated, unavailable }
 
 String _normalizeCaretakerLoginEmail(String email) {
   final normalizedEmail = email.trim().toLowerCase();
@@ -13,6 +18,13 @@ String _normalizeCaretakerLoginEmail(String email) {
 }
 
 class AuthService extends ChangeNotifier {
+  AuthService({this.startupRetryDelay = const Duration(seconds: 2)});
+
+  static const int _startupMaxAttempts = 3;
+  static const Duration _startupFirstTimeout = Duration(seconds: 60);
+  static const Duration _startupRetryTimeout = Duration(seconds: 15);
+
+  final Duration startupRetryDelay;
   UserModel? _currentUser;
   bool _isLoading = false;
   String? _error;
@@ -48,95 +60,159 @@ class AuthService extends ChangeNotifier {
     return raw;
   }
 
-  Future<void> checkAuthState(ApiService api) async {
+  Future<AuthCheckResult> checkAuthState(ApiService api) async {
     final prefs = await SharedPreferences.getInstance();
     final token = prefs.getString('token');
     final email = prefs.getString('email');
+
+    if (token == null || token.isEmpty) {
+      _currentUser = null;
+      _error = null;
+      notifyListeners();
+      return AuthCheckResult.unauthenticated;
+    }
+
     if (token != null && email == null && prefs.getString('role') == 'driver') {
-      try {
-        final remoteUser = await api.getDriverCurrentUser(token);
-        _currentUser = UserModel.fromJson({...remoteUser, 'token': token});
-        await prefs.setString('name', _currentUser!.name);
-        await prefs.setString('phone', _currentUser!.phone ?? '');
-        if (_currentUser!.busNumber != null) {
-          await prefs.setInt('busNumber', _currentUser!.busNumber!);
+      final validation = await _validateSavedSession(
+        (timeout) => api.getDriverCurrentUser(token, timeout: timeout),
+      );
+      if (validation.result != AuthCheckResult.authenticated) {
+        if (validation.result == AuthCheckResult.unauthenticated) {
+          await _clearSavedCredentials(prefs);
         }
-      } catch (_) {
-        _currentUser = null;
-        for (final key in [
-          'token',
-          'phone',
-          'busNumber',
-          'name',
-          'role',
-          'userId',
-        ]) {
-          await prefs.remove(key);
-        }
+        notifyListeners();
+        return validation.result;
       }
-      notifyListeners();
-      return;
-    }
-    if (token != null && email == null) {
-      for (final key in [
-        'token',
-        'phone',
-        'busNumber',
-        'name',
-        'role',
-        'userId',
-        'hostelId',
-      ]) {
-        await prefs.remove(key);
+
+      _currentUser = UserModel.fromJson({...validation.user!, 'token': token});
+      await prefs.setString('name', _currentUser!.name);
+      await prefs.setString('phone', _currentUser!.phone ?? '');
+      if (_currentUser!.busNumber != null) {
+        await prefs.setInt('busNumber', _currentUser!.busNumber!);
       }
+      _error = null;
       notifyListeners();
-      return;
+      return AuthCheckResult.authenticated;
     }
+
+    if (email == null) {
+      _currentUser = null;
+      await _clearSavedCredentials(prefs);
+      notifyListeners();
+      return AuthCheckResult.unauthenticated;
+    }
+
     final name = prefs.getString('name');
     final role = prefs.getString('role');
     final hostelId = prefs.getString('hostelId');
     final userId = prefs.getString('userId');
 
-    if (token != null && email != null) {
-      try {
-        final remoteUser = await api.getCurrentUser(token);
-        _currentUser = UserModel(
-          id: (remoteUser['id'] ?? userId ?? '').toString(),
-          name: (remoteUser['name'] ?? name ?? '').toString(),
-          email: (remoteUser['email'] ?? email ?? '').toString(),
-          role: (remoteUser['role'] ?? role ?? 'student').toString(),
-          hostelId: remoteUser['hostelId']?.toString() ?? hostelId,
-          mustChangePassword: remoteUser['mustChangePassword'] == true,
-          token: token,
-        );
-
-        if (_currentUser!.email.isNotEmpty) {
-          await prefs.setString('email', _currentUser!.email);
-        }
-        await prefs.setString('name', _currentUser!.name);
-        await prefs.setString('role', _currentUser!.role);
-        await prefs.setString('userId', _currentUser!.id);
-        if (_currentUser!.hostelId != null &&
-            _currentUser!.hostelId!.isNotEmpty) {
-          await prefs.setString('hostelId', _currentUser!.hostelId!);
-        }
-      } catch (_) {
-        _currentUser = null;
-        for (final key in [
-          'token',
-          'email',
-          'phone',
-          'name',
-          'role',
-          'userId',
-          'hostelId',
-          'busNumber',
-        ]) {
-          await prefs.remove(key);
-        }
+    final validation = await _validateSavedSession(
+      (timeout) => api.getCurrentUser(token, timeout: timeout),
+    );
+    if (validation.result != AuthCheckResult.authenticated) {
+      if (validation.result == AuthCheckResult.unauthenticated) {
+        await _clearSavedCredentials(prefs);
       }
-
       notifyListeners();
+      return validation.result;
+    }
+
+    final remoteUser = validation.user!;
+    _currentUser = UserModel(
+      id: (remoteUser['id'] ?? userId ?? '').toString(),
+      name: (remoteUser['name'] ?? name ?? '').toString(),
+      email: (remoteUser['email'] ?? email).toString(),
+      role: (remoteUser['role'] ?? role ?? 'student').toString(),
+      hostelId: remoteUser['hostelId']?.toString() ?? hostelId,
+      mustChangePassword: remoteUser['mustChangePassword'] == true,
+      token: token,
+    );
+
+    if (_currentUser!.email.isNotEmpty) {
+      await prefs.setString('email', _currentUser!.email);
+    }
+    await prefs.setString('name', _currentUser!.name);
+    await prefs.setString('role', _currentUser!.role);
+    await prefs.setString('userId', _currentUser!.id);
+    if (_currentUser!.hostelId != null && _currentUser!.hostelId!.isNotEmpty) {
+      await prefs.setString('hostelId', _currentUser!.hostelId!);
+    }
+    _error = null;
+    notifyListeners();
+    return AuthCheckResult.authenticated;
+  }
+
+  Future<_SessionValidation> _validateSavedSession(
+    Future<Map<String, dynamic>> Function(Duration timeout) request,
+  ) async {
+    _error = null;
+    Object? lastError;
+    for (var attempt = 0; attempt < _startupMaxAttempts; attempt++) {
+      final timeout = attempt == 0
+          ? _startupFirstTimeout
+          : _startupRetryTimeout;
+      try {
+        final user = await request(timeout);
+        return _SessionValidation(AuthCheckResult.authenticated, user: user);
+      } catch (error) {
+        lastError = error;
+        if (_isInvalidSavedSession(error)) {
+          _currentUser = null;
+          return const _SessionValidation(AuthCheckResult.unauthenticated);
+        }
+
+        final isTransient = _isTransientAuthFailure(error);
+        if (!isTransient || attempt == _startupMaxAttempts - 1) break;
+        await Future<void>.delayed(startupRetryDelay);
+      }
+    }
+
+    _currentUser = null;
+    _error = _isTransientAuthFailure(lastError)
+        ? 'Server is waking up, please try again.'
+        : 'Could not verify your session. Please try again.';
+    return const _SessionValidation(AuthCheckResult.unavailable);
+  }
+
+  bool _isInvalidSavedSession(Object error) {
+    if (error is! ApiResponseException) return false;
+    if (error.statusCode == 401) return true;
+    if (error.statusCode != 403) return false;
+
+    final code = error.code?.toUpperCase();
+    if (code == 'AUTHENTICATION_REQUIRED' ||
+        code == 'INVALID_SESSION' ||
+        code == 'SESSION_EXPIRED') {
+      return true;
+    }
+    return RegExp(
+      r'\b(invalid|expired)\b.*\b(session|token)\b|\b(session|token)\b.*\b(invalid|expired)\b',
+      caseSensitive: false,
+    ).hasMatch(error.message);
+  }
+
+  bool _isTransientAuthFailure(Object? error) {
+    if (error is TimeoutException || error is http.ClientException) return true;
+    // Keep SocketException support without importing dart:io into Flutter web.
+    if (error?.runtimeType.toString() == 'SocketException') return true;
+    return error is ApiResponseException && error.statusCode >= 500;
+  }
+
+  Future<void> _clearSavedCredentials(SharedPreferences prefs) async {
+    _currentUser = null;
+    _error = null;
+    for (final key in [
+      'token',
+      'email',
+      'phone',
+      'busNumber',
+      'name',
+      'role',
+      'userId',
+      'hostelId',
+    ]) {
+      await prefs.remove(key);
     }
   }
 
@@ -342,4 +418,11 @@ class AuthService extends ChangeNotifier {
     notifyListeners();
     return true;
   }
+}
+
+class _SessionValidation {
+  const _SessionValidation(this.result, {this.user});
+
+  final AuthCheckResult result;
+  final Map<String, dynamic>? user;
 }

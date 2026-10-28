@@ -18,6 +18,7 @@ const {
 } = require('./auth_credentials');
 const { createLoginAttemptStore, hashLoginIdentifier } = require('./login_attempts');
 const { createPasswordRecoveryRouter, digest, normalizeMobile } = require('./password_recovery');
+const { createEmailPasswordRecoveryRouter } = require('./email_password_recovery');
 const { createPasswordRecoveryStore } = require('./password_recovery_store');
 const { fingerprintDatabaseIdentity } = require('./database_identity');
 const { createTelemetryRateLimiter, findDeviceKeyAssignment, timingSafeSecretEqual } = require('./device_keys');
@@ -37,6 +38,9 @@ require('dotenv').config({
     path: process.env.SMARTBUS_ENV_FILE || path.join(__dirname, '.env.local'),
     quiet: true,
 });
+
+if (!process.env.RESEND_API_KEY) console.error('Password recovery email is disabled: RESEND_API_KEY is not configured.');
+if (!process.env.MAIL_FROM) console.error('Password recovery email is disabled: MAIL_FROM is not configured.');
 
 if (process.env.NODE_ENV === 'production' && process.env.ALLOW_LEGACY_API_KEY === 'true' && !process.env.API_SECRET_KEY) {
     throw new Error('API_SECRET_KEY must be configured in production');
@@ -521,6 +525,16 @@ CREATE TABLE IF NOT EXISTS password_reset_otps (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 `);
+    await q(`CREATE TABLE IF NOT EXISTS email_password_recovery_otps (
+        id BIGSERIAL PRIMARY KEY,
+        user_id VARCHAR(40) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        otp_hash VARCHAR(100) NOT NULL,
+        expires_at TIMESTAMPTZ NOT NULL,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        used BOOLEAN NOT NULL DEFAULT false,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`);
+    await q('CREATE INDEX IF NOT EXISTS email_password_recovery_otps_user_created_idx ON email_password_recovery_otps (user_id, created_at DESC)');
     await q(`CREATE INDEX IF NOT EXISTS password_reset_otps_user_created_idx
         ON password_reset_otps (user_id, created_at DESC)`);
     await q(`CREATE TABLE IF NOT EXISTS registration_mobile_verifications (
@@ -1215,6 +1229,16 @@ app.use('/api/auth', createPasswordRecoveryRouter({
     baseUrl: () => process.env.PUBLIC_BASE_URL || process.env.RENDER_EXTERNAL_URL || `http://localhost:${port}`,
     production: process.env.NODE_ENV === 'production',
 }));
+
+const emailPasswordRecoveryRouter = createEmailPasswordRecoveryRouter({
+    getPool: () => pool,
+});
+app.use('/api/auth', emailPasswordRecoveryRouter);
+// Compatibility for older app builds still posting to the original root URL.
+app.post('/request', (req, res, next) => {
+    req.url = '/password-recovery/request';
+    emailPasswordRecoveryRouter(req, res, next);
+});
 
 app.post('/api/auth/change-password', async (req, res) => {
     const auth = requireAuth(req, res, ['student', 'caretaker', 'admin']);

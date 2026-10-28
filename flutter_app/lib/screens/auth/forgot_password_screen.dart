@@ -7,15 +7,7 @@ import 'package:provider/provider.dart';
 
 import '../../services/api_service.dart';
 
-enum _RecoveryMethod { mobile, email }
-
-enum _RecoveryStage {
-  enterDetails,
-  verifyOtp,
-  createPassword,
-  emailSent,
-  success,
-}
+enum _RecoveryStage { enterDetails, verifyOtp, emailSent, success }
 
 class ForgotPasswordScreen extends StatefulWidget {
   const ForgotPasswordScreen({super.key});
@@ -26,26 +18,18 @@ class ForgotPasswordScreen extends StatefulWidget {
 
 class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
   final _emailController = TextEditingController();
-  final _mobileController = TextEditingController();
   final _otpController = TextEditingController();
   final _passwordController = TextEditingController();
   final _confirmController = TextEditingController();
-  _RecoveryMethod _method = _RecoveryMethod.mobile;
   _RecoveryStage _stage = _RecoveryStage.enterDetails;
-  Timer? _countdownTimer;
-  String? _resetToken;
   String? _errorMessage;
   bool _isLoading = false;
   bool _obscurePassword = true;
   bool _obscureConfirmation = true;
-  int _otpSecondsRemaining = 0;
-  int _resendSecondsRemaining = 0;
 
   @override
   void dispose() {
-    _countdownTimer?.cancel();
     _emailController.dispose();
-    _mobileController.dispose();
     _otpController.dispose();
     _passwordController.dispose();
     _confirmController.dispose();
@@ -54,111 +38,19 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
 
   Future<void> _requestRecovery() async {
     if (_isLoading) return;
-    final destination = _method == _RecoveryMethod.email
-        ? _emailController.text.trim()
-        : _mobileController.text.trim();
     final email = _emailController.text.trim();
     if (!RegExp(r'^[^\s@]+@[^\s@]+\.[^\s@]+$').hasMatch(email)) {
       setState(() => _errorMessage = 'Enter a valid college email address.');
       return;
     }
-    if (_method == _RecoveryMethod.mobile &&
-        !RegExp(
-          r'^(?:\+?91[ -]?)?[6-9]\d{9}$',
-        ).hasMatch(destination.replaceAll(RegExp(r'[()\s-]'), ''))) {
-      setState(
-        () => _errorMessage = 'Enter a valid 10-digit Indian mobile number.',
-      );
-      return;
-    }
-
     setState(() {
       _isLoading = true;
       _errorMessage = null;
     });
     try {
-      await context.read<ApiService>().requestPasswordRecovery(
-        method: _method == _RecoveryMethod.email ? 'email' : 'mobile',
-        destination: destination,
-        accountEmail: _method == _RecoveryMethod.mobile ? email : null,
-      );
+      await context.read<ApiService>().requestEmailPasswordRecovery(email);
       if (!mounted) return;
-      if (_method == _RecoveryMethod.email) {
-        setState(() => _stage = _RecoveryStage.emailSent);
-      } else {
-        setState(() => _stage = _RecoveryStage.verifyOtp);
-        _startOtpCountdown();
-      }
-    } catch (error) {
-      if (mounted) setState(() => _errorMessage = _messageFrom(error));
-    } finally {
-      if (mounted) setState(() => _isLoading = false);
-    }
-  }
-
-  void _startOtpCountdown() {
-    _countdownTimer?.cancel();
-    setState(() {
-      _otpSecondsRemaining = 5 * 60;
-      _resendSecondsRemaining = 60;
-    });
-    _countdownTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
-      if (!mounted ||
-          (_otpSecondsRemaining == 0 && _resendSecondsRemaining == 0)) {
-        timer.cancel();
-        return;
-      }
-      setState(() {
-        if (_otpSecondsRemaining > 0) _otpSecondsRemaining--;
-        if (_resendSecondsRemaining > 0) _resendSecondsRemaining--;
-      });
-    });
-  }
-
-  Future<void> _resendOtp() async {
-    if (_isLoading || _resendSecondsRemaining > 0) return;
-    setState(() {
-      _isLoading = true;
-      _errorMessage = null;
-    });
-    try {
-      await context.read<ApiService>().resendPasswordResetOtp(
-        _emailController.text.trim(),
-        _mobileController.text.trim(),
-      );
-      if (mounted) _startOtpCountdown();
-    } catch (error) {
-      if (mounted) setState(() => _errorMessage = _messageFrom(error));
-    } finally {
-      if (mounted) setState(() => _isLoading = false);
-    }
-  }
-
-  Future<void> _verifyOtp() async {
-    if (_otpSecondsRemaining == 0) {
-      setState(
-        () => _errorMessage = 'This code has expired. Request a new code.',
-      );
-      return;
-    }
-    if (!RegExp(r'^\d{6}$').hasMatch(_otpController.text.trim())) {
-      setState(() => _errorMessage = 'Enter the six-digit code.');
-      return;
-    }
-    setState(() {
-      _isLoading = true;
-      _errorMessage = null;
-    });
-    try {
-      _resetToken = await context.read<ApiService>().verifyPasswordResetOtp(
-        _emailController.text.trim(),
-        _mobileController.text.trim(),
-        _otpController.text.trim(),
-      );
-      if (mounted) {
-        _countdownTimer?.cancel();
-        setState(() => _stage = _RecoveryStage.createPassword);
-      }
+      setState(() => _stage = _RecoveryStage.verifyOtp);
     } catch (error) {
       if (mounted) setState(() => _errorMessage = _messageFrom(error));
     } finally {
@@ -168,9 +60,15 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
 
   Future<void> _savePassword() async {
     final password = _passwordController.text;
-    if (password.length < 9 || password.length > 128) {
+    if (!RegExp(r'^\d{6}$').hasMatch(_otpController.text.trim())) {
       setState(
-        () => _errorMessage = 'Use a password between 9 and 128 characters.',
+        () => _errorMessage = 'Enter the six-digit code from your email.',
+      );
+      return;
+    }
+    if (password.length < 8 || password.length > 128) {
+      setState(
+        () => _errorMessage = 'Use a password between 8 and 128 characters.',
       );
       return;
     }
@@ -178,20 +76,16 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
       setState(() => _errorMessage = 'The passwords do not match.');
       return;
     }
-    final token = _resetToken;
-    if (token == null) {
-      setState(
-        () => _errorMessage = 'Your verification has expired. Start again.',
-      );
-      return;
-    }
-
     setState(() {
       _isLoading = true;
       _errorMessage = null;
     });
     try {
-      await context.read<ApiService>().resetPassword(token, password);
+      await context.read<ApiService>().verifyEmailPasswordRecovery(
+        email: _emailController.text.trim(),
+        otp: _otpController.text.trim(),
+        newPassword: password,
+      );
       if (mounted) setState(() => _stage = _RecoveryStage.success);
     } catch (error) {
       if (mounted) setState(() => _errorMessage = _messageFrom(error));
@@ -218,9 +112,6 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
     }
     return message;
   }
-
-  String _formatDuration(int seconds) =>
-      '${seconds ~/ 60}:${(seconds % 60).toString().padLeft(2, '0')}';
 
   void _backToLogin() {
     Navigator.of(context).popUntil((route) => route.isFirst);
@@ -256,7 +147,6 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
     return switch (_stage) {
       _RecoveryStage.enterDetails => _buildDetailsStage(),
       _RecoveryStage.verifyOtp => _buildOtpStage(),
-      _RecoveryStage.createPassword => _buildPasswordStage(),
       _RecoveryStage.emailSent => _buildEmailSentStage(),
       _RecoveryStage.success => _buildSuccessStage(),
     };
@@ -314,41 +204,33 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
       children: [
         _heading(
           'Get back on the move',
-          'Choose a recovery method linked to your account.',
+          'Receive a password recovery code at your college email address.',
           Icons.lock_reset_rounded,
         ),
         const SizedBox(height: 24),
-        SegmentedButton<_RecoveryMethod>(
-          segments: const [
-            ButtonSegment(
-              value: _RecoveryMethod.mobile,
-              icon: Icon(Icons.sms_outlined),
-              label: Text('Mobile OTP'),
-            ),
-            ButtonSegment(
-              value: _RecoveryMethod.email,
-              icon: Icon(Icons.email_outlined),
-              label: Text('College email'),
-            ),
-          ],
-          selected: {_method},
-          onSelectionChanged: (selection) {
-            setState(() {
-              _method = selection.first;
-              _errorMessage = null;
-            });
-          },
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          decoration: BoxDecoration(
+            color: const Color(0xFFEAF2FC),
+            borderRadius: BorderRadius.circular(14),
+          ),
+          child: const Row(
+            children: [
+              Icon(Icons.email_outlined, color: Color(0xFF1565C0)),
+              SizedBox(width: 10),
+              Text(
+                'College email',
+                style: TextStyle(fontWeight: FontWeight.w600),
+              ),
+            ],
+          ),
         ),
         const SizedBox(height: 20),
         TextField(
           controller: _emailController,
           keyboardType: TextInputType.emailAddress,
-          textInputAction: _method == _RecoveryMethod.mobile
-              ? TextInputAction.next
-              : TextInputAction.done,
-          onSubmitted: _method == _RecoveryMethod.email
-              ? (_) => _requestRecovery()
-              : null,
+          textInputAction: TextInputAction.done,
+          onSubmitted: (_) => _requestRecovery(),
           decoration: InputDecoration(
             labelText: 'Registered college email',
             hintText: 'name@nitmz.ac.in',
@@ -356,32 +238,13 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
             border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
           ),
         ),
-        if (_method == _RecoveryMethod.mobile) ...[
-          const SizedBox(height: 14),
-          TextField(
-            controller: _mobileController,
-            keyboardType: TextInputType.phone,
-            textInputAction: TextInputAction.done,
-            onSubmitted: (_) => _requestRecovery(),
-            decoration: InputDecoration(
-              labelText: 'Registered mobile number',
-              hintText: '+91 98765 43210',
-              prefixIcon: const Icon(Icons.phone_iphone),
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(14),
-              ),
-            ),
-          ),
-        ],
         if (_errorMessage != null) ...[
           const SizedBox(height: 14),
           _errorBanner(),
         ],
         const SizedBox(height: 20),
         _primaryButton(
-          label: _method == _RecoveryMethod.email
-              ? 'Send reset link'
-              : 'Send code',
+          label: 'Send recovery code',
           onPressed: _requestRecovery,
         ),
       ],
@@ -393,9 +256,9 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         _heading(
-          'Recovery request accepted',
-          'If this number matches a verified account and SMS delivery succeeds, a code will arrive. Delivery is not confirmed. If no code arrives, try email recovery or resend later.',
-          Icons.sms_outlined,
+          'Check your college email',
+          'If this email is registered, a six-digit code has been sent. The code expires in 10 minutes.',
+          Icons.mark_email_read_outlined,
         ),
         const SizedBox(height: 24),
         TextField(
@@ -413,40 +276,32 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
             letterSpacing: 6,
           ),
           decoration: InputDecoration(
-            labelText: 'One-time code',
+            labelText: 'Six-digit email code',
             hintText: '••••••',
             border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
           ),
         ),
         const SizedBox(height: 12),
-        Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              _otpSecondsRemaining > 0
-                  ? 'Code expires in ${_formatDuration(_otpSecondsRemaining)}'
-                  : 'Code expired',
-              style: TextStyle(
-                color: _otpSecondsRemaining > 0
-                    ? Colors.blueGrey.shade600
-                    : Colors.red.shade700,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-            Align(
-              alignment: Alignment.centerRight,
-              child: TextButton(
-                onPressed: _resendSecondsRemaining == 0 && !_isLoading
-                    ? _resendOtp
-                    : null,
-                child: Text(
-                  _resendSecondsRemaining == 0
-                      ? 'Resend code'
-                      : 'Resend in ${_resendSecondsRemaining}s',
-                ),
-              ),
-            ),
-          ],
+        TextField(
+          controller: _passwordController,
+          obscureText: _obscurePassword,
+          textInputAction: TextInputAction.next,
+          decoration: InputDecoration(
+            labelText: 'New password',
+            helperText: '8 to 128 characters',
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
+          ),
+        ),
+        const SizedBox(height: 14),
+        TextField(
+          controller: _confirmController,
+          obscureText: _obscureConfirmation,
+          textInputAction: TextInputAction.done,
+          onSubmitted: (_) => _savePassword(),
+          decoration: InputDecoration(
+            labelText: 'Confirm new password',
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
+          ),
         ),
         if (_errorMessage != null) ...[
           const SizedBox(height: 8),
@@ -454,9 +309,8 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
         ],
         const SizedBox(height: 12),
         _primaryButton(
-          label: 'Verify code',
-          onPressed: _verifyOtp,
-          disabled: _otpSecondsRemaining == 0,
+          label: 'Verify code and update password',
+          onPressed: _savePassword,
         ),
       ],
     ),

@@ -18,6 +18,7 @@ class _RecoveryApi extends ApiService {
   String? verifiedOtp;
   String? resetToken;
   String? newPassword;
+  String? emailOtp;
   Object? recoveryError;
   int recoveryRequestCount = 0;
   Completer<String>? recoveryCompleter;
@@ -35,6 +36,27 @@ class _RecoveryApi extends ApiService {
     if (recoveryError != null) throw recoveryError!;
     if (recoveryCompleter != null) return recoveryCompleter!.future;
     return 'If an account exists, recovery instructions will be sent.';
+  }
+
+  @override
+  Future<String> requestEmailPasswordRecovery(String email) async {
+    recoveryRequestCount++;
+    requestedDestination = email;
+    if (recoveryError != null) throw recoveryError!;
+    if (recoveryCompleter != null) return recoveryCompleter!.future;
+    return 'If this email is registered, a code has been sent.';
+  }
+
+  @override
+  Future<void> verifyEmailPasswordRecovery({
+    required String email,
+    required String otp,
+    required String newPassword,
+  }) async {
+    verifiedEmail = email;
+    emailOtp = otp;
+    this.newPassword = newPassword;
+    if (recoveryError != null) throw recoveryError!;
   }
 
   @override
@@ -179,11 +201,11 @@ void main() {
     );
   });
 
-  testWidgets('rejected request stays out of OTP verification', (tester) async {
+  testWidgets('rejected email request stays out of OTP verification', (
+    tester,
+  ) async {
     final api = _RecoveryApi()
-      ..recoveryError = Exception(
-        'Enter the registered email and mobile number.',
-      );
+      ..recoveryError = Exception('Email service is temporarily unavailable.');
     await tester.pumpWidget(_buildTestApp(api));
     await tester.tap(find.text('Sign in'));
     await tester.pumpAndSettle();
@@ -191,12 +213,11 @@ void main() {
       find.byType(TextField).at(0),
       'caretaker-bh1@nitmz.ac.in',
     );
-    await tester.enterText(find.byType(TextField).at(1), '9876543210');
-    await tester.tap(find.text('Send code'));
+    await tester.tap(find.text('Send recovery code'));
     await tester.pump();
 
     expect(
-      find.textContaining('registered email and mobile number'),
+      find.textContaining('Email service is temporarily unavailable'),
       findsOneWidget,
     );
     expect(find.text('Verify your number'), findsNothing);
@@ -210,20 +231,17 @@ void main() {
     await tester.tap(find.text('Sign in'));
     await tester.pumpAndSettle();
 
-    await tester.tap(find.text('College email'));
-    await tester.pump();
     await tester.enterText(find.byType(TextField), 'student@nitmz.ac.in');
-    await tester.tap(find.text('Send reset link'));
+    await tester.tap(find.text('Send recovery code'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 250));
 
-    expect(api.requestedMethod, 'email');
     expect(api.requestedDestination, 'student@nitmz.ac.in');
-    expect(find.text('Recovery request accepted'), findsOneWidget);
-    expect(find.textContaining('Delivery is not confirmed'), findsOneWidget);
+    expect(find.text('Check your college email'), findsOneWidget);
+    expect(find.text('Mobile OTP'), findsNothing);
   });
 
-  testWidgets('a pending mobile request cannot be submitted twice', (
+  testWidgets('a pending email request cannot be submitted twice', (
     tester,
   ) async {
     final api = _RecoveryApi()..recoveryCompleter = Completer<String>();
@@ -234,8 +252,7 @@ void main() {
       find.byType(TextField).at(0),
       'caretaker-bh1@nitmz.ac.in',
     );
-    await tester.enterText(find.byType(TextField).at(1), '9876543210');
-    await tester.tap(find.text('Send code'));
+    await tester.tap(find.text('Send recovery code'));
     await tester.pump();
     await tester.tap(find.byType(FilledButton).first, warnIfMissed: false);
     await tester.pump();
@@ -244,7 +261,7 @@ void main() {
     api.recoveryCompleter!.complete('Recovery queued');
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 250));
-    expect(find.text('Recovery request accepted'), findsOneWidget);
+    expect(find.text('Check your college email'), findsOneWidget);
   });
 
   testWidgets(
@@ -262,8 +279,7 @@ void main() {
         find.byType(TextField).at(0),
         'caretaker-bh1@nitmz.ac.in',
       );
-      await tester.enterText(find.byType(TextField).at(1), '9876543210');
-      await tester.tap(find.text('Send code'));
+      await tester.tap(find.text('Send recovery code'));
       await tester.pump();
 
       expect(
@@ -277,7 +293,7 @@ void main() {
     },
   );
 
-  testWidgets('mobile OTP recovery resets the password and returns to login', (
+  testWidgets('college email OTP recovery resets password and returns to login', (
     tester,
   ) async {
     final api = _RecoveryApi();
@@ -289,28 +305,19 @@ void main() {
       find.byType(TextField).at(0),
       'caretaker-bh1@nitmz.ac.in',
     );
-    await tester.enterText(find.byType(TextField).at(1), '9876543210');
-    await tester.tap(find.text('Send code'));
+    await tester.tap(find.text('Send recovery code'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 250));
-    expect(find.text('Recovery request accepted'), findsOneWidget);
-
-    await tester.enterText(find.byType(TextField).first, '123456');
-    await tester.tap(find.text('Verify code'));
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 250));
-    expect(api.verifiedMobile, '9876543210');
-    expect(api.verifiedEmail, 'caretaker-bh1@nitmz.ac.in');
-    expect(api.verifiedOtp, '123456');
-    expect(find.text('Create a new password'), findsOneWidget);
-
-    await tester.enterText(find.byType(TextField).at(0), 'NewPassword123');
+    expect(find.text('Check your college email'), findsOneWidget);
+    await tester.enterText(find.byType(TextField).at(0), '123456');
     await tester.enterText(find.byType(TextField).at(1), 'NewPassword123');
-    await tester.tap(find.text('Update password'));
+    await tester.enterText(find.byType(TextField).at(2), 'NewPassword123');
+    await tester.tap(find.text('Verify code and update password'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 250));
 
-    expect(api.resetToken, 'one-time-reset-token');
+    expect(api.emailOtp, '123456');
+    expect(api.verifiedEmail, 'caretaker-bh1@nitmz.ac.in');
     expect(api.newPassword, 'NewPassword123');
     expect(
       find.text(

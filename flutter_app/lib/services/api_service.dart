@@ -346,6 +346,26 @@ class ApiService {
   Future<String> forgotPassword(String email) =>
       requestPasswordRecovery(method: 'email', destination: email);
 
+  Future<String> requestEmailPasswordRecovery(String email) async {
+    final data = await _postRecoveryJson('/auth/password-recovery/request', {
+      'email': email.trim().toLowerCase(),
+    });
+    return data['message']?.toString() ??
+        'If this email is registered, a code has been sent.';
+  }
+
+  Future<void> verifyEmailPasswordRecovery({
+    required String email,
+    required String otp,
+    required String newPassword,
+  }) async {
+    await _postRecoveryJson('/auth/password-recovery/verify', {
+      'email': email.trim().toLowerCase(),
+      'otp': otp.trim(),
+      'newPassword': newPassword,
+    });
+  }
+
   Future<String> resendPasswordResetOtp(String email, String mobile) async {
     final data = await _postRecoveryJson('/auth/resend-otp', {
       'email': email.trim().toLowerCase(),
@@ -543,22 +563,25 @@ class ApiService {
     }
   }
 
-  Future<Map<String, dynamic>> getDriverCurrentUser(String token) async {
+  Future<Map<String, dynamic>> getDriverCurrentUser(
+    String token, {
+    Duration timeout = const Duration(seconds: 15),
+  }) async {
     final response = await http
         .get(Uri.parse('$baseUrl/auth/driver/me'), headers: _headers(token))
-        .timeout(const Duration(seconds: 15));
-    final data = response.body.isNotEmpty
-        ? _decodeJsonResponse(response)
-        : null;
+        .timeout(timeout);
+    final data = _tryDecodeJson(response.body);
     if (response.statusCode == 200 &&
         data is Map<String, dynamic> &&
         data['user'] is Map<String, dynamic>) {
       return data['user'] as Map<String, dynamic>;
     }
-    throw Exception(
-      data is Map<String, dynamic>
-          ? data['error'] ?? 'Driver session expired'
-          : 'Driver session expired',
+    throw ApiResponseException(
+      statusCode: response.statusCode,
+      code: data is Map<String, dynamic> ? data['code']?.toString() : null,
+      message: data is Map<String, dynamic>
+          ? data['error']?.toString() ?? 'Could not verify driver session'
+          : 'Could not verify driver session',
     );
   }
 
@@ -622,24 +645,31 @@ class ApiService {
     }
   }
 
-  Future<Map<String, dynamic>> getCurrentUser(String token) async {
+  Future<Map<String, dynamic>> getCurrentUser(
+    String token, {
+    Duration timeout = const Duration(seconds: 8),
+  }) async {
     final response = await http
         .get(Uri.parse('$baseUrl/me'), headers: _headers(token))
-        .timeout(const Duration(seconds: 8));
+        .timeout(timeout);
 
-    final data = response.body.isNotEmpty
-        ? _decodeJsonResponse(response)
-        : null;
+    final data = _tryDecodeJson(response.body);
     if (response.statusCode == 200 && data is Map<String, dynamic>) {
       final user = data['user'];
       if (user is Map<String, dynamic>) return user;
-      throw Exception('Invalid user response');
+      throw const ApiResponseException(
+        statusCode: 502,
+        message: 'Could not verify user session',
+      );
     }
 
-    final message = data is Map<String, dynamic>
-        ? (data['error']?.toString() ?? 'Session invalid')
-        : 'Session invalid';
-    throw Exception(message);
+    throw ApiResponseException(
+      statusCode: response.statusCode,
+      code: data is Map<String, dynamic> ? data['code']?.toString() : null,
+      message: data is Map<String, dynamic>
+          ? data['error']?.toString() ?? 'Could not verify user session'
+          : 'Could not verify user session',
+    );
   }
 
   Future<Map<String, dynamic>> getApiRoot() async {

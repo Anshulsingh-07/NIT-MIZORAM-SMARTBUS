@@ -22,6 +22,8 @@ class _SplashScreenState extends State<SplashScreen>
   late Animation<double> _fadeAnim;
   late Animation<double> _scaleAnim;
   Timer? _authTimer;
+  bool _isCheckingSession = false;
+  bool _showRetry = false;
 
   @override
   void initState() {
@@ -44,18 +46,34 @@ class _SplashScreenState extends State<SplashScreen>
 
   Future<void> _checkAuth() async {
     if (!mounted) return;
+    setState(() {
+      _isCheckingSession = true;
+      _showRetry = false;
+    });
     final auth = context.read<AuthService>();
     final api = context.read<ApiService>();
+    late final AuthCheckResult result;
     try {
-      await auth.checkAuthState(api);
-    } catch (e) {
-      // If any platform or prefs error occurs, fall back to login screen.
-      if (mounted) _navigate(const LoginScreen());
+      result = await auth.checkAuthState(api);
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _isCheckingSession = false;
+          _showRetry = true;
+        });
+      }
       return;
     }
 
     if (!mounted) return;
-    if (auth.isLoggedIn) {
+    if (result == AuthCheckResult.unavailable) {
+      setState(() {
+        _isCheckingSession = false;
+        _showRetry = true;
+      });
+      return;
+    }
+    if (result == AuthCheckResult.authenticated && auth.isLoggedIn) {
       _navigate(
         auth.currentUser?.mustChangePassword == true
             ? const PasswordChangeScreen()
@@ -88,6 +106,9 @@ class _SplashScreenState extends State<SplashScreen>
 
   @override
   Widget build(BuildContext context) {
+    final retryMessage =
+        context.watch<AuthService>().error ??
+        'Server is waking up, please try again.';
     return Scaffold(
       body: Container(
         decoration: const BoxDecoration(
@@ -155,22 +176,49 @@ class _SplashScreenState extends State<SplashScreen>
                       ),
                     ),
                     const SizedBox(height: 60),
-                    SizedBox(
-                      width: 40,
-                      height: 40,
-                      child: CircularProgressIndicator(
-                        color: Colors.white.withValues(alpha: 0.7),
-                        strokeWidth: 3,
+                    if (_isCheckingSession || !_showRetry) ...[
+                      SizedBox(
+                        width: 40,
+                        height: 40,
+                        child: CircularProgressIndicator(
+                          color: Colors.white.withValues(alpha: 0.7),
+                          strokeWidth: 3,
+                        ),
                       ),
-                    ),
-                    const SizedBox(height: 16),
-                    Text(
-                      'Loading...',
-                      style: TextStyle(
-                        color: Colors.white.withValues(alpha: 0.7),
-                        fontSize: 14,
+                      const SizedBox(height: 16),
+                      Text(
+                        _isCheckingSession
+                            ? 'Reconnecting to server...'
+                            : 'Loading...',
+                        style: TextStyle(
+                          color: Colors.white.withValues(alpha: 0.7),
+                          fontSize: 14,
+                        ),
                       ),
-                    ),
+                    ],
+                    if (_showRetry) ...[
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 28),
+                        child: Text(
+                          retryMessage,
+                          textAlign: TextAlign.center,
+                          style: TextStyle(color: Colors.white, fontSize: 15),
+                        ),
+                      ),
+                      const SizedBox(height: 18),
+                      FilledButton(
+                        onPressed: _checkAuth,
+                        style: FilledButton.styleFrom(
+                          foregroundColor: const Color(0xFF0D47A1),
+                          backgroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 36,
+                            vertical: 12,
+                          ),
+                        ),
+                        child: const Text('Retry'),
+                      ),
+                    ],
                   ],
                 ),
               ),
