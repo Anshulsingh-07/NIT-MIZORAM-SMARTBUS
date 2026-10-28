@@ -1,0 +1,47 @@
+services:
+  - type: web
+    name: nit-mizoram-campus-bus-service
+    runtime: node
+    plan: free
+    rootDir: .
+    buildCommand: npm ci --omit=dev
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: API_SECRET_KEY
+        sync: false
+      - key: DB_HOST
+        sync: false
+      - key: DB_PORT
+        value: 5432
+      - key: DB_USER
+        sync: false
+      - key: DB_PASSWORD
+        sync: false
+      - key: DB_NAME
+        value: postgres
+      - key: DB_CONNECTION_TIMEOUT_MS
+        value: 5000
+      - key: DB_QUERY_TIMEOUT_MS
+        value: 8000
+      - key: DB_SSL
+        value: true
+      - key: LOCAL_MOCK_DELIVERY
+        value: false
+      - key: MAIL_FROM
+        sync: false
+      - key: BREVO_API_KEY
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: PUBLIC_BASE_URL
+        sync: false
+      - key: PASSWORD_RESET_OTP_SECRET
+        sync: false
+      - key: TWILIO_ACCOUNT_SID
+        sync: false
+      - key: TWILIO_AUTH_TOKEN
+        sync: false
+      - key: TWILIO_FROM_NUMBER
+        sync: false

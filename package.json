@@ -1,0 +1,20 @@
+{
+  "name": "nit-mizoram-campus-bus-server",
+  "version": "1.0.0",
+  "private": true,
+  "main": "server.js",
+  "scripts": {
+    "start": "node my_server/server.js",
+    "test": "node --test test/*.test.js my_server/test/*.test.js",
+    "db:migrate:local": "node my_server/scripts/migrate-local.js",
+    "db:seed:local": "node my_server/scripts/seed-local-caretakers.js",
+    "db:provision:supabase:caretakers": "node my_server/scripts/provision-supabase-caretakers.js"
+  },
+  "type": "commonjs",
+  "dependencies": {
+    "bcryptjs": "^3.0.3",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "pg": "^8.23.0"
+  }
+}

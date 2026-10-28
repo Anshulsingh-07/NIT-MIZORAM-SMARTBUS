@@ -1,0 +1,17 @@
+version: '3.8'
+services:
+  server:
+    build: .
+    image: campus-bus-server:latest
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    env_file:
+      - .env.prod
+    environment:
+      - NODE_ENV=production
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

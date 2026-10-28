@@ -1,0 +1,21 @@
+{
+  "name": "nit-mizoram-campus-bus-server",
+  "version": "1.0.0",
+  "private": true,
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "device:key:create": "node scripts/create-device-key.js",
+    "caretakers:provision": "node scripts/provision-caretakers.js",
+    "test:auth": "node scripts/test-auth-local.js",
+    "test": "node --test test/*.test.js"
+  },
+  "type": "commonjs",
+  "dependencies": {
+    "bcryptjs": "^3.0.3",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "helmet": "^8.3.0",
+    "pg": "^8.23.0"
+  }
+}

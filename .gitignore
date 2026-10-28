@@ -1,0 +1,61 @@
+# Environment files: keep only checked-in examples.
+.env
+.env.*
+!.env.example
+!.env.render.example
+**/.env
+**/.env.*
+!**/.env.example
+!**/.env.render.example
+
+# Dependencies and generated build output.
+node_modules/
+**/node_modules/
+build/
+**/build/
+.dart_tool/
+**/.dart_tool/
+.gradle/
+**/.gradle/
+.packages
+.pub-cache/
+.pub/
+coverage/
+__pycache__/
+**/__pycache__/
+*.py[cod]
+.flutter-plugins-dependencies
+*.iml
+*.bundle
+flutter_test_log.txt
+
+# Local credentials and signing material.
+*.jks
+*.keystore
+*.pem
+*.key
+key.properties
+**/key.properties
+local.properties
+**/local.properties
+google-services.json
+**/google-services.json
+GoogleService-Info.plist
+**/GoogleService-Info.plist
+
+# Logs, editor state, temporary recovery workspace, and OS files.
+*.log
+*.tmp
+*.temp
+.recovery-push-worktree/
+.vscode/
+**/.vscode/
+.idea/
+**/.idea/
+.DS_Store
+Thumbs.db
+
+# Existing project exclusions.
+exports/
+**/exports/
+flutter_app_BACKUP/
