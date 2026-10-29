@@ -7,7 +7,7 @@ const express = require('express');
 const GENERIC_MESSAGE = 'If this email is registered, a code has been sent.';
 const INVALID_MESSAGE = 'Invalid or expired code';
 
-function createEmailPasswordRecoveryRouter({ getPool, env = process.env, logger = console, fetchImpl = globalThis.fetch, clock = Date.now }) {
+function createEmailPasswordRecoveryRouter({ getPool, env = process.env, logger = console, sendMail, emailConfigured, clock = Date.now }) {
     const router = express.Router();
     const emailRequests = new Map();
     const ipRequests = new Map();
@@ -22,35 +22,16 @@ function createEmailPasswordRecoveryRouter({ getPool, env = process.env, logger 
         return true;
     }
 
-    function enabled() { return Boolean(env.RESEND_API_KEY && env.MAIL_FROM); }
+    function enabled() { return typeof sendMail === 'function' && (emailConfigured ? emailConfigured() : Boolean(env.MAIL_PROVIDER && env.APPS_SCRIPT_URL && env.MAIL_SECRET)); }
     function unavailable(res) { return res.status(503).json({ error: 'Email recovery is temporarily unavailable.' }); }
     function badCode(res) { return res.status(400).json({ error: INVALID_MESSAGE }); }
 
     async function sendEmail(to, otp) {
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 8000);
-        let response;
-        try {
-            response = await fetchImpl('https://api.resend.com/emails', {
-                method: 'POST',
-                headers: { authorization: `Bearer ${env.RESEND_API_KEY}`, 'content-type': 'application/json' },
-                body: JSON.stringify({
-                    from: env.MAIL_FROM,
-                    to: [to],
-                    subject: 'Campus Bus Tracker password recovery',
-                    text: `Your password recovery code is ${otp}. It expires in 10 minutes. If you did not request this code, ignore this email.`,
-                }),
-                signal: controller.signal,
-            });
-        } finally {
-            clearTimeout(timeout);
-        }
-        if (!response.ok) {
-            const body = await response.text().catch(() => '');
-            const error = new Error(`Resend HTTP ${response.status}`);
-            error.providerBody = body;
-            throw error;
-        }
+        await sendMail({
+            to,
+            subject: 'Campus Bus Tracker password recovery',
+            text: `Your password recovery code is ${otp}. It expires in 10 minutes. If you did not request this code, ignore this email.`,
+        }, { env });
     }
 
     async function requestHandler(req, res) {
@@ -91,7 +72,7 @@ function createEmailPasswordRecoveryRouter({ getPool, env = process.env, logger 
                 try {
                     await sendEmail(user.email, otp);
                 } catch (error) {
-                    logger.error('Resend email delivery failed:', error.providerBody || error.message);
+                    logger.error('Password recovery email delivery failed:', error.providerBody || error.message);
                     await pool.query('UPDATE email_password_recovery_otps SET used = true WHERE user_id = $1 AND used = false', [user.id]).catch(() => {});
                 }
             } catch (error) {

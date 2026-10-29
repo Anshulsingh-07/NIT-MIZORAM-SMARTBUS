@@ -1233,6 +1233,9 @@ app.use('/api/auth', createPasswordRecoveryRouter({
 
 const emailPasswordRecoveryRouter = createEmailPasswordRecoveryRouter({
     getPool: () => pool,
+    env: process.env,
+    sendMail,
+    emailConfigured: () => Boolean(mailProvider(process.env)),
 });
 app.use('/api/auth', emailPasswordRecoveryRouter);
 // Compatibility for older app builds still posting to the original root URL.
