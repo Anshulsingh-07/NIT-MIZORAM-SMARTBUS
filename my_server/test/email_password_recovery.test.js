@@ -6,7 +6,7 @@ const bcrypt = require('bcryptjs');
 const express = require('express');
 const { createEmailPasswordRecoveryRouter } = require('../email_password_recovery');
 
-async function startServer({ env = {}, knownEmail = 'student@nitmz.ac.in' } = {}) {
+async function startServer({ env = {}, knownEmail = 'registered@example.invalid', providerResponse = { ok: true, error: null } } = {}) {
     const state = { resets: [], sent: [] };
     const pool = {
         async query(sql, params = []) {
@@ -33,8 +33,14 @@ async function startServer({ env = {}, knownEmail = 'student@nitmz.ac.in' } = {}
         getPool: () => pool,
         env,
         logger: { error: (...args) => state.errors.push(args) },
-        sendMail: async (message) => {
-            state.sent.push(message);
+        fetchImpl: async (_url, options) => {
+            state.sent.push(JSON.parse(options.body));
+            return {
+                ok: true,
+                status: 200,
+                headers: { get: () => 'application/json' },
+                json: async () => providerResponse,
+            };
         },
         emailConfigured: () => Boolean(env.MAIL_PROVIDER === 'apps_script'),
     }));
@@ -60,25 +66,25 @@ async function waitFor(check) {
     assert.fail('Timed out waiting for recovery mail');
 }
 
-test('email OTP request sends through configured mail adapter and returns a generic 200 response', async (t) => {
+test('email OTP request sends through configured Apps Script adapter and returns generic 202', async (t) => {
     const harness = await startServer({
-        env: { MAIL_PROVIDER: 'apps_script', APPS_SCRIPT_URL: 'https://script.google.com/macros/s/test/exec', MAIL_SECRET: 'test' },
+        env: { APPS_SCRIPT_URL: 'https://script.google.com/macros/s/test/exec', APPS_SCRIPT_SECRET: 'fixture-secret' },
     });
     t.after(() => harness.close());
-    const known = await harness.post('/api/auth/password-recovery/request', { email: ' STUDENT@NITMZ.AC.IN ' });
-    const unknown = await harness.post('/api/auth/password-recovery/request', { email: 'unknown@nitmz.ac.in' });
-    assert.equal(known.status, 200);
-    assert.equal(known.data.message, 'If this email is registered, a code has been sent.');
+    const known = await harness.post('/api/auth/password-recovery/request', { email: ' REGISTERED@EXAMPLE.INVALID ' });
+    const unknown = await harness.post('/api/auth/password-recovery/request', { email: 'unknown@example.invalid' });
+    assert.equal(known.status, 202);
+    assert.equal(known.data.message, 'If this email is registered, a code has been sent. Check your spam folder too.');
     assert.deepEqual(unknown, known);
     await waitFor(() => harness.state.sent.length === 1);
-    assert.equal(harness.state.sent[0].to, 'student@nitmz.ac.in');
-    const otp = harness.state.sent[0].text.match(/\b\d{6}\b/)[0];
+    assert.equal(harness.state.sent[0].to === 'registered@example.invalid', true);
+    const otp = harness.state.sent[0].otp;
     assert.equal(await bcrypt.compare(otp, harness.state.resets[0].otpHash), true);
 });
 
 test('email OTP request returns 503 when no mail provider is configured', async (t) => {
     const harness = await startServer();
     t.after(() => harness.close());
-    const response = await harness.post('/api/auth/password-recovery/request', { email: 'student@nitmz.ac.in' });
+    const response = await harness.post('/api/auth/password-recovery/request', { email: 'registered@example.invalid' });
     assert.equal(response.status, 503);
 });

@@ -12,10 +12,10 @@ function createAppsScript({ secret = 'shared-secret' } = {}) {
     const sent = [];
     const context = {
         PropertiesService: {
-            getScriptProperties: () => ({ getProperty: (key) => key === 'MAIL_SECRET' ? secret : null }),
+            getScriptProperties: () => ({ getProperty: (key) => key === 'APPS_SCRIPT_SECRET' ? secret : null }),
         },
         ContentService: {
-            MimeType: { TEXT: 'text/plain' },
+            MimeType: { JSON: 'application/json' },
             createTextOutput: (content) => ({
                 content,
                 setMimeType(value) { this.mimeType = value; return this; },
@@ -34,41 +34,39 @@ function createAppsScript({ secret = 'shared-secret' } = {}) {
 test('Apps Script validates the shared secret before attempting delivery', () => {
     const app = createAppsScript();
     const response = app.post({ secret: 'wrong-secret', to: 'user@example.com', otp: '123456' });
-    assert.equal(response.content, 'ERROR: unauthorized');
+    assert.deepEqual(JSON.parse(response.content), { ok: false, error: 'unauthorized' });
     assert.equal(app.sent.length, 0);
 });
 
-test('Apps Script keeps compatibility with the supplied OTP test payload and never generates OTPs', () => {
-    const app = createAppsScript();
-    const response = app.post({ secret: 'shared-secret', to: 'user@example.com', otp: '493027' });
-    assert.equal(response.content, 'OK');
-    assert.equal(response.mimeType, 'text/plain');
-    assert.deepEqual(app.sent, [[
-        'user@example.com',
-        'SmartBus password reset code',
-        'Your SmartBus password reset code is 493027.',
-    ]]);
+test('Apps Script rejects requests when the configured secret is empty', () => {
+    const app = createAppsScript({ secret: '' });
+    const response = app.post({ secret: '', to: 'user@example.com', otp: '123456' });
+    assert.deepEqual(JSON.parse(response.content), { ok: false, error: 'unauthorized' });
+    assert.equal(app.sent.length, 0);
 });
 
-test('Apps Script sends password-reset link content without changing the message', () => {
+test('Apps Script sends only the supplied OTP and returns JSON success', () => {
     const app = createAppsScript();
-    const payload = {
-        secret: 'shared-secret',
-        to: 'user@example.com',
-        subject: 'SmartBus password reset',
-        text: 'Open https://bus.example.test/reset-password#token=opaque-token',
-        html: '<a href="https://bus.example.test/reset-password#token=opaque-token">Reset password</a>',
-    };
-    assert.equal(app.post(payload).content, 'OK');
+    const response = app.post({ secret: 'shared-secret', to: 'user@example.com', otp: '493027' });
+    assert.deepEqual(JSON.parse(response.content), { ok: true });
+    assert.equal(response.mimeType, 'application/json');
     assert.equal(app.sent.length, 1);
-    assert.deepEqual(app.sent[0].slice(0, 3), [payload.to, payload.subject, payload.text]);
-    assert.equal(app.sent[0][3].htmlBody, payload.html);
+    assert.equal(app.sent[0][0], 'user@example.com');
+    assert.equal(app.sent[0][1], 'SmartBus password recovery code');
+    assert.equal(app.sent[0][2].includes('expires in 10 minutes'), true);
 });
 
 test('Apps Script rejects malformed payloads and invalid legacy OTPs without sending email', () => {
     const app = createAppsScript();
-    assert.equal(app.postRaw('{malformed').content, 'ERROR: invalid request');
-    assert.equal(app.post({ secret: 'shared-secret', to: 'user@example.com', otp: 'not-six-digits' }).content, 'ERROR: invalid request');
-    assert.equal(app.post({ secret: 'shared-secret', to: 'invalid-address', subject: 'Subject', text: 'Body' }).content, 'ERROR: invalid request');
+    assert.deepEqual(JSON.parse(app.postRaw('{malformed').content), { ok: false, error: 'bad_to' });
+    assert.deepEqual(JSON.parse(app.post({ secret: 'shared-secret', to: 'user@example.com', otp: 'not-six-digits' }).content), { ok: false, error: 'bad_otp' });
+    assert.deepEqual(JSON.parse(app.post({ secret: 'shared-secret', to: 'invalid-address', otp: '123456' }).content), { ok: false, error: 'bad_to' });
     assert.equal(app.sent.length, 0);
+});
+
+test('Apps Script maps Gmail delivery exceptions to send_failed', () => {
+    const app = createAppsScript();
+    app.sent.push = () => { throw new Error('fixture only'); };
+    const response = app.post({ secret: 'shared-secret', to: 'user@example.com', otp: '123456' });
+    assert.deepEqual(JSON.parse(response.content), { ok: false, error: 'send_failed' });
 });

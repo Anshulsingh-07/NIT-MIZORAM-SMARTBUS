@@ -13,7 +13,6 @@ const {
     normalizeMobile,
 } = require('../password_recovery');
 const { sendSms, smsProvider } = require('../sms');
-const { sendMail } = require('../mailer');
 
 const OTP_SECRET = 'unit-test-password-reset-secret-long-enough';
 const GENERIC = 'If an account exists and delivery is available, recovery instructions will be sent.';
@@ -220,107 +219,6 @@ test('temporary-password sessions only allow profile, password change, and logou
     assert.equal(canAccessDuringPasswordChange('/api/buses'), false);
 });
 
-test('email recovery gives a generic response and sends a hashed 15-minute token to the registered email', async (t) => {
-    const harness = await createHarness();
-    t.after(() => harness.close());
-
-    const known = await harness.request('forgot-password', {
-        method: 'email',
-        email: 'CARETAKER-BH1@NITMZ.AC.IN',
-    });
-    const unknown = await harness.request('forgot-password', {
-        method: 'email',
-        email: 'unknown@nitmz.ac.in',
-    });
-    await waitFor(() => harness.mails.length === 1);
-    assert.equal(known.status, 202);
-    assert.equal(known.data.accepted, true);
-    assert.equal(known.data.deliveryConfirmed, false);
-    assert.equal(known.data.code, 'RECOVERY_ACCEPTED');
-    assert.equal(known.data.message, GENERIC);
-    assert.deepEqual(unknown, known);
-    assert.equal(harness.mails.length, 1);
-    assert.equal(harness.mails[0].to, 'caretaker-bh1@nitmz.ac.in');
-    assert.match(harness.mails[0].text, /expires in 15 minutes/);
-
-    const token = new URL(harness.mails[0].text.match(/https:\/\/\S+/)[0]).hash.slice('#token='.length);
-    assert.match(token, /^[a-f0-9]{64}$/);
-    assert.equal(harness.store.resets[0].tokenHash, digest(token));
-    assert.equal(harness.store.resets[0].expiresAt - Date.now() < 15 * 60 * 1000, true);
-    assert.equal(JSON.stringify(known.data).includes(token), false);
-});
-
-test('password recovery delivers its existing reset link through the Apps Script mailer', async (t) => {
-    const calls = [];
-    const harness = await createHarness({
-        sendMailImpl: (message) => sendMail(message, {
-            env: {
-                MAIL_PROVIDER: 'apps_script',
-                APPS_SCRIPT_URL: 'https://script.google.com/macros/s/deployment123/exec',
-                MAIL_SECRET: 'test-apps-script-secret',
-            },
-            fetchImpl: async (...args) => {
-                calls.push(args);
-                return {
-                    ok: true,
-                    status: 200,
-                    headers: { get: () => null },
-                    text: async () => 'OK',
-                };
-            },
-        }),
-    });
-    t.after(() => harness.close());
-
-    const response = await harness.request('forgot-password', {
-        method: 'email', email: 'caretaker-bh1@nitmz.ac.in',
-    });
-    await waitFor(() => calls.length === 1);
-    assert.equal(response.status, 202);
-    const payload = JSON.parse(calls[0][1].body);
-    assert.equal(payload.secret, 'test-apps-script-secret');
-    assert.equal(payload.to, 'caretaker-bh1@nitmz.ac.in');
-    assert.equal(payload.subject, 'SmartBus password reset');
-    assert.match(payload.text, /expires in 15 minutes/);
-    const token = new URL(payload.text.match(/https:\/\/\S+/)[0]).hash.slice('#token='.length);
-    assert.match(token, /^[a-f0-9]{64}$/);
-    assert.equal(harness.store.resets[0].tokenHash, digest(token));
-    assert.equal(JSON.stringify(response.data).includes(token), false);
-});
-
-test('email reset rejects invalid, expired, and already-used tokens; success updates password and invalidates sessions', async (t) => {
-    const harness = await createHarness();
-    t.after(() => harness.close());
-    await harness.request('forgot-password', { method: 'email', email: 'caretaker-bh1@nitmz.ac.in' });
-    await waitFor(() => harness.mails.length === 1);
-    const token = new URL(harness.mails[0].text.match(/https:\/\/\S+/)[0]).hash.slice('#token='.length);
-
-    assert.equal((await harness.request('reset-password', { token: 'bad', newPassword: 'New-password-456' })).status, 400);
-    const success = await harness.request('reset-password', { token, newPassword: 'New-password-456' });
-    assert.equal(success.status, 200);
-    assert.match(success.data.message, /reset successfully/);
-    assert.equal(await bcrypt.compare('New-password-456', harness.users[0].passwordHash), true);
-    assert.equal(await bcrypt.compare('Old-password-123', harness.users[0].passwordHash), false);
-    assert.equal(harness.users[0].role, 'caretaker');
-    assert.equal(harness.users[0].mustChangePassword, false);
-    assert.equal(harness.sessions.size, 0);
-    assert.equal((await harness.request('reset-password', { token, newPassword: 'Newer-password-789' })).status, 400);
-
-    const expiredHarness = await createHarness();
-    t.after(() => expiredHarness.close());
-    await expiredHarness.request('forgot-password', {
-        method: 'email',
-        email: 'caretaker-bh1@nitmz.ac.in',
-    });
-    await waitFor(() => expiredHarness.mails.length === 1);
-    const expiredToken = new URL(expiredHarness.mails[0].text.match(/https:\/\/\S+/)[0]).hash.slice('#token='.length);
-    expiredHarness.setTime(Date.now() + 16 * 60 * 1000);
-    assert.equal((await expiredHarness.request('reset-password', {
-        token: expiredToken,
-        newPassword: 'New-password-456',
-    })).status, 400);
-});
-
 test('mobile requests require a verified number and never return the OTP', async (t) => {
     const unverified = {
         id: 'student-1',
@@ -438,78 +336,6 @@ test('OTP expires after five minutes and locks after five incorrect attempts', a
     assert.equal((await attemptsHarness.request('verify-otp', { ...verificationRequest, otp: actualOtp })).status, 400);
 });
 
-test('email provider failures do not reveal account existence or log recovery material', async (t) => {
-    const logs = [];
-    const harness = await createHarness({ mailFailure: true, logs });
-    t.after(() => harness.close());
-    const known = await harness.request('forgot-password', {
-        method: 'email',
-        email: 'caretaker-bh1@nitmz.ac.in',
-    });
-    const unknown = await harness.request('forgot-password', {
-        method: 'email',
-        email: 'unknown@nitmz.ac.in',
-    });
-    await waitFor(() => logs.length === 1);
-    assert.deepEqual(known, unknown);
-    assert.equal(known.data.message, GENERIC);
-    assert.equal(harness.store.resets.length, 0);
-    assert.deepEqual(logs, ['Password recovery failed: EMAIL_DELIVERY_PROVIDER_FAILED']);
-});
-
-test('recovery requests are throttled by account and source IP', async (t) => {
-    const accountHarness = await createHarness();
-    t.after(() => accountHarness.close());
-    for (let attempt = 0; attempt < 3; attempt++) {
-        assert.equal((await accountHarness.request('forgot-password', {
-            method: 'email',
-            email: 'caretaker-bh1@nitmz.ac.in',
-        })).status, 202);
-    }
-    assert.equal((await accountHarness.request('forgot-password', {
-        method: 'email',
-        email: 'caretaker-bh1@nitmz.ac.in',
-    })).status, 429);
-
-    const ipHarness = await createHarness();
-    t.after(() => ipHarness.close());
-    for (let attempt = 0; attempt < 10; attempt++) {
-        assert.equal((await ipHarness.request('forgot-password', {
-            method: 'email',
-            email: `unknown-${attempt}@nitmz.ac.in`,
-        })).status, 202);
-    }
-    assert.equal((await ipHarness.request('forgot-password', {
-        method: 'email',
-        email: 'unknown-extra@nitmz.ac.in',
-    })).status, 429);
-});
-
-test('database lookup timeout does not delay or hang the generic HTTP response', async (t) => {
-    const logs = [];
-    const store = {
-        cleanupExpired: async () => {},
-        findUserByEmail: () => new Promise(() => {}),
-    };
-    const harness = await createHarness({
-        store,
-        backgroundWorkTimeoutMs: 20,
-        logs,
-    });
-    t.after(() => harness.close());
-    const startedAt = Date.now();
-    const response = await harness.request('forgot-password', {
-        method: 'email',
-        email: 'caretaker-bh1@nitmz.ac.in',
-    });
-    assert.equal(response.status, 202);
-    assert.equal(response.data.message, GENERIC);
-    assert.equal(response.data.deliveryConfirmed, false);
-    assert.ok(Date.now() - startedAt < 1000);
-    await waitFor(() => logs.length === 1);
-    assert.deepEqual(logs, ['Password recovery failed: RECOVERY_WORK_TIMEOUT']);
-});
-
 test('simultaneous mobile recovery requests create at most one OTP', async (t) => {
     const harness = await createHarness();
     t.after(() => harness.close());
@@ -600,56 +426,6 @@ test('SMS configuration and provider failures do not disclose account existence 
     assert.equal(failedDelivery.store.otps.length, 0);
     assert.deepEqual(logs, ['Password recovery failed: SMS_DELIVERY_PROVIDER_FAILED']);
     assert.equal(JSON.stringify(logs).includes(failedDelivery.messages[0].body.match(/\d{6}/)[0]), false);
-});
-
-test('email provider configuration failure returns a stable unavailable code', async (t) => {
-    const harness = await createHarness({ emailConfigured: false });
-    t.after(() => harness.close());
-    const known = await harness.request('forgot-password', {
-        method: 'email', email: 'caretaker-bh1@nitmz.ac.in',
-    });
-    const unknown = await harness.request('forgot-password', {
-        method: 'email', email: 'unknown@nitmz.ac.in',
-    });
-    assert.deepEqual(known, unknown);
-    assert.equal(known.status, 503);
-    assert.equal(known.data.code, 'EMAIL_PROVIDER_UNAVAILABLE');
-});
-
-test('email sender and provider credential failures have distinct fixed response codes', async (t) => {
-    const noSender = await createHarness({ emailConfigurationIssue: 'MAIL_FROM_UNAVAILABLE' });
-    t.after(() => noSender.close());
-    const senderResponse = await noSender.request('forgot-password', {
-        method: 'email', email: 'synthetic.user@unit.test',
-    });
-    assert.equal(senderResponse.status, 503);
-    assert.equal(senderResponse.data.code, 'MAIL_FROM_UNAVAILABLE');
-
-    const noProviderKey = await createHarness({ emailConfigurationIssue: 'EMAIL_PROVIDER_CREDENTIALS_UNAVAILABLE' });
-    t.after(() => noProviderKey.close());
-    const providerResponse = await noProviderKey.request('forgot-password', {
-        method: 'email', email: 'synthetic.user@unit.test',
-    });
-    assert.equal(providerResponse.status, 503);
-    assert.equal(providerResponse.data.code, 'EMAIL_PROVIDER_CREDENTIALS_UNAVAILABLE');
-});
-
-test('database failure is logged with a fixed reason while public acknowledgement stays account-neutral', async (t) => {
-    const logs = [];
-    const store = {
-        cleanupExpired: async () => {},
-        findUserByEmail: async () => { throw new Error('synthetic database details'); },
-    };
-    const harness = await createHarness({ store, logs });
-    t.after(() => harness.close());
-    const response = await harness.request('forgot-password', {
-        method: 'email', email: 'synthetic.user@unit.test',
-    });
-    assert.equal(response.status, 202);
-    assert.equal(response.data.deliveryConfirmed, false);
-    await waitFor(() => logs.length === 1);
-    assert.deepEqual(logs, ['Password recovery failed: RECOVERY_DATABASE_UNAVAILABLE']);
-    assert.equal(JSON.stringify(logs).includes('synthetic database details'), false);
 });
 
 test('OTP secret configuration failure is distinguished from SMS provider configuration', async (t) => {

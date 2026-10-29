@@ -28,9 +28,9 @@ class ApiService {
   static String get trackingBaseUrl => baseUrl;
   static String get trackingLatestEndpoint => '$baseUrl/location/latest';
   static const Duration _telemetryEndpointBackoff = Duration(seconds: 45);
-  static const Duration _recoveryConnectTimeout = Duration(seconds: 15);
-  static const Duration _recoveryResponseTimeout = Duration(seconds: 10);
-  static const Duration _recoveryOverallTimeout = Duration(seconds: 30);
+  static const Duration _recoveryConnectTimeout = Duration(seconds: 60);
+  static const Duration _recoveryResponseTimeout = Duration(seconds: 15);
+  static const Duration _recoveryOverallTimeout = Duration(seconds: 75);
   static final Map<String, DateTime> _telemetryBackoffUntil = {};
   static final AuthenticatedStreamCoordinator<List<Map<String, dynamic>>>
   _busStreamCoordinator = AuthenticatedStreamCoordinator(
@@ -154,7 +154,7 @@ class ApiService {
       throw Exception('We could not verify that request. Please try again.');
     }
     if (status == 429) {
-      throw Exception('Too many attempts. Please wait a little and try again.');
+      throw Exception('Too many attempts. Request a new code later.');
     }
     if (status >= 500) {
       throw Exception(
@@ -192,6 +192,12 @@ class ApiService {
     }
 
     if (status == 400) {
+      if (decoded['code'] == 'OTP_EXPIRED') {
+        throw Exception('That code has expired. Request a new code.');
+      }
+      if (decoded['code'] == 'INVALID_OTP') {
+        throw Exception('That code is incorrect. Check it and try again.');
+      }
       throw Exception(
         decoded['message']?.toString() ??
             decoded['error']?.toString() ??
@@ -347,10 +353,12 @@ class ApiService {
       requestPasswordRecovery(method: 'email', destination: email);
 
   Future<String> requestEmailPasswordRecovery(String email) async {
-    return requestPasswordRecovery(
-      method: 'email',
-      destination: email,
-    );
+    final data = await _postRecoveryJson('/auth/forgot-password', {
+      'method': 'email',
+      'email': email.trim().toLowerCase(),
+    });
+    return data['message']?.toString() ??
+        'If this email is registered, a code has been sent. Check your spam folder too.';
   }
 
   Future<void> verifyEmailPasswordRecovery({
@@ -363,6 +371,14 @@ class ApiService {
       'otp': otp.trim(),
       'newPassword': newPassword,
     });
+  }
+
+  Future<String> resendEmailPasswordRecovery(String email) async {
+    final data = await _postRecoveryJson('/auth/resend-otp', {
+      'email': email.trim().toLowerCase(),
+    });
+    return data['message']?.toString() ??
+        'If this email is registered, a new code has been sent.';
   }
 
   Future<String> resendPasswordResetOtp(String email, String mobile) async {

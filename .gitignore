@@ -59,3 +59,7 @@ Thumbs.db
 exports/
 **/exports/
 flutter_app_BACKUP/
+
+# Local caretaker provisioning credentials.
+.caretaker-credentials.txt
+**/.caretaker-credentials.txt

@@ -3,54 +3,35 @@ function doPost(e) {
   try {
     payload = JSON.parse(e && e.postData && e.postData.contents ? e.postData.contents : '');
   } catch (_) {
-    return response('ERROR: invalid request');
+    return response({ ok: false, error: 'bad_to' });
   }
 
-  var expectedSecret = PropertiesService.getScriptProperties().getProperty('MAIL_SECRET') || '';
-  if (!constantTimeEqual(String(payload && payload.secret || ''), expectedSecret)) {
-    return response('ERROR: unauthorized');
+  var expectedSecret = PropertiesService.getScriptProperties().getProperty('APPS_SCRIPT_SECRET') || '';
+  var providedSecret = String(payload && payload.secret || '');
+  if (!expectedSecret || !providedSecret || !constantTimeEqual(providedSecret, expectedSecret)) {
+    return response({ ok: false, error: 'unauthorized' });
   }
 
   try {
     if (!payload || typeof payload.to !== 'string' || !isValidEmail(payload.to)) {
-      return response('ERROR: invalid request');
+      return response({ ok: false, error: 'bad_to' });
     }
-
-    var subject;
-    var text;
-    var html = '';
-    if (Object.prototype.hasOwnProperty.call(payload, 'otp')) {
-      if (typeof payload.otp !== 'string' || !/^\d{6}$/.test(payload.otp)) {
-        return response('ERROR: invalid request');
-      }
-      subject = typeof payload.subject === 'string' && payload.subject ? payload.subject : 'SmartBus password reset code';
-      text = typeof payload.text === 'string' && payload.text
-        ? payload.text
-        : 'Your SmartBus password reset code is ' + payload.otp + '.';
-      html = typeof payload.html === 'string' ? payload.html : '';
-    } else {
-      if (typeof payload.subject !== 'string' || !payload.subject ||
-          typeof payload.text !== 'string' || !payload.text) {
-        return response('ERROR: invalid request');
-      }
-      subject = payload.subject;
-      text = payload.text;
-      html = typeof payload.html === 'string' ? payload.html : '';
+    if (typeof payload.otp !== 'string' || !/^\d{6}$/.test(payload.otp)) {
+      return response({ ok: false, error: 'bad_otp' });
     }
-
-    if (html) {
-      GmailApp.sendEmail(payload.to, subject, text, { htmlBody: html });
-    } else {
-      GmailApp.sendEmail(payload.to, subject, text);
-    }
-    return response('OK');
+    GmailApp.sendEmail(
+      payload.to,
+      'SmartBus password recovery code',
+      'Your SmartBus password recovery code is ' + payload.otp + '. It expires in 10 minutes. If you did not request it, ignore this email.'
+    );
+    return response({ ok: true });
   } catch (_) {
-    return response('ERROR: email delivery failed');
+    return response({ ok: false, error: 'send_failed' });
   }
 }
 
-function response(message) {
-  return ContentService.createTextOutput(message).setMimeType(ContentService.MimeType.TEXT);
+function response(result) {
+  return ContentService.createTextOutput(JSON.stringify(result)).setMimeType(ContentService.MimeType.JSON);
 }
 
 function isValidEmail(value) {

@@ -61,29 +61,13 @@ function consumeLimit(limits, key, limit, windowMs, now) {
     return true;
 }
 
-function buildResetUrl(baseUrl, token, production) {
-    const url = new URL(baseUrl);
-    if ((production && url.protocol !== 'https:') || !['http:', 'https:'].includes(url.protocol) ||
-        url.username || url.password || url.search || url.hash) {
-        throw new Error('Password reset base URL is not allowed');
-    }
-    url.pathname = '/reset-password';
-    url.hash = `token=${token}`;
-    return url.toString();
-}
-
 function createPasswordRecoveryRouter({
     store,
     sessions,
     sessionStore,
-    emailConfigurationIssue,
-    emailConfigured,
-    sendMail,
     smsConfigured,
     sendSms,
     otpSecret,
-    baseUrl,
-    production = false,
     backgroundWorkTimeoutMs = 15000,
     clock = Date.now,
     logger = console,
@@ -153,67 +137,10 @@ function createPasswordRecoveryRouter({
         }
     }
 
-    router.post('/forgot-password', async (req, res) => {
+    router.post('/forgot-password', async (req, res, next) => {
         const method = String(req.body?.method || '').toLowerCase();
+        if (method === 'email') return next();
         const ip = req.ip || req.socket.remoteAddress || 'unknown';
-        const now = clock();
-
-        if (method === 'email') {
-            const email = String(req.body?.email || '').trim().toLowerCase();
-            if (email.length > 120 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-                return recoveryError(res, 400, 'INVALID_REQUEST', 'Enter a valid college email address.');
-            }
-            if (!allowed(method, email, ip)) {
-                return recoveryError(res, 429, 'RATE_LIMITED', 'Too many recovery requests. Try again later.');
-            }
-            const emailConfigIssue = emailConfigurationIssue?.();
-            if (emailConfigIssue) {
-                return recoveryError(res, 503, emailConfigIssue, 'Email recovery is temporarily unavailable. Please try again later.');
-            }
-            if (!emailConfigured()) {
-                return recoveryError(res, 503, 'EMAIL_PROVIDER_UNAVAILABLE', 'Email recovery is temporarily unavailable. Please try again later.');
-            }
-
-            enqueueRecovery(async () => {
-                let user;
-                try {
-                    await store.cleanupExpired();
-                    user = await store.findUserByEmail(email);
-                } catch (_) {
-                    throw new RecoveryDependencyError('RECOVERY_DATABASE_UNAVAILABLE');
-                }
-                if (user) {
-                    const token = crypto.randomBytes(32).toString('hex');
-                    const tokenHash = digest(token);
-                    const expiresAt = new Date(now + 15 * 60 * 1000);
-                    let resetUrl;
-                    try {
-                        resetUrl = buildResetUrl(baseUrl(), token, production);
-                    } catch (_) {
-                        throw new RecoveryDependencyError('RECOVERY_CONFIGURATION_INVALID');
-                    }
-                    try {
-                        await store.createEmailReset(user.id, tokenHash, expiresAt);
-                    } catch (_) {
-                        throw new RecoveryDependencyError('RECOVERY_DATABASE_UNAVAILABLE');
-                    }
-                    try {
-                        await sendMail({
-                            to: user.email,
-                            subject: 'SmartBus password reset',
-                            text: `Use this link to reset your password. It expires in 15 minutes:\n${resetUrl}`,
-                            html: `<p>Use this link to reset your password. It expires in 15 minutes.</p><p><a href="${resetUrl}">Reset password</a></p>`,
-                        });
-                    } catch (_) {
-                        await store.deleteResetToken(tokenHash).catch(() => {
-                            throw new RecoveryDependencyError('RECOVERY_DATABASE_UNAVAILABLE');
-                        });
-                        throw new RecoveryDependencyError('EMAIL_DELIVERY_PROVIDER_FAILED');
-                    }
-                }
-            });
-            return acceptedRecovery(res);
-        }
 
         if (method === 'mobile') {
             const email = String(req.body?.email || '').trim().toLowerCase();

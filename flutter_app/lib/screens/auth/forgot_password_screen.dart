@@ -1,12 +1,13 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:provider/provider.dart';
 
 import '../../services/api_service.dart';
 
-enum _RecoveryStage { enterDetails, emailSent }
+enum _RecoveryStage { enterDetails, verifyOtp, success }
 
 class ForgotPasswordScreen extends StatefulWidget {
   const ForgotPasswordScreen({super.key});
@@ -17,13 +18,24 @@ class ForgotPasswordScreen extends StatefulWidget {
 
 class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
   final _emailController = TextEditingController();
+  final _otpController = TextEditingController();
+  final _passwordController = TextEditingController();
+  final _confirmController = TextEditingController();
   _RecoveryStage _stage = _RecoveryStage.enterDetails;
   String? _errorMessage;
   bool _isLoading = false;
+  bool _obscurePassword = true;
+  bool _obscureConfirmation = true;
+  int _resendSeconds = 0;
+  Timer? _resendTimer;
 
   @override
   void dispose() {
     _emailController.dispose();
+    _otpController.dispose();
+    _passwordController.dispose();
+    _confirmController.dispose();
+    _resendTimer?.cancel();
     super.dispose();
   }
 
@@ -39,12 +51,75 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
       _errorMessage = null;
     });
     try {
-      await context.read<ApiService>().requestPasswordRecovery(
-        method: 'email',
-        destination: email,
-      );
+      await context.read<ApiService>().requestEmailPasswordRecovery(email);
       if (!mounted) return;
-      setState(() => _stage = _RecoveryStage.emailSent);
+      setState(() => _stage = _RecoveryStage.verifyOtp);
+      _startResendCooldown();
+    } catch (error) {
+      if (mounted) setState(() => _errorMessage = _messageFrom(error));
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  void _startResendCooldown() {
+    _resendTimer?.cancel();
+    setState(() => _resendSeconds = 60);
+    _resendTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (!mounted) return timer.cancel();
+      if (_resendSeconds <= 1) {
+        timer.cancel();
+        setState(() => _resendSeconds = 0);
+      } else {
+        setState(() => _resendSeconds -= 1);
+      }
+    });
+  }
+
+  Future<void> _resendCode() async {
+    if (_isLoading || _resendSeconds > 0) return;
+    setState(() {
+      _isLoading = true;
+      _errorMessage = null;
+    });
+    try {
+      await context.read<ApiService>().resendEmailPasswordRecovery(
+        _emailController.text.trim(),
+      );
+      if (mounted) _startResendCooldown();
+    } catch (error) {
+      if (mounted) setState(() => _errorMessage = _messageFrom(error));
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  Future<void> _verifyCode() async {
+    final otp = _otpController.text.trim();
+    final password = _passwordController.text;
+    if (!RegExp(r'^\d{6}$').hasMatch(otp)) {
+      setState(() => _errorMessage = 'Enter the six-digit code from your email.');
+      return;
+    }
+    if (password.length < 8 || password.length > 128) {
+      setState(() => _errorMessage = 'Use a password between 8 and 128 characters.');
+      return;
+    }
+    if (password != _confirmController.text) {
+      setState(() => _errorMessage = 'The passwords do not match.');
+      return;
+    }
+    setState(() {
+      _isLoading = true;
+      _errorMessage = null;
+    });
+    try {
+      await context.read<ApiService>().verifyEmailPasswordRecovery(
+        email: _emailController.text.trim(),
+        otp: otp,
+        newPassword: password,
+      );
+      if (mounted) setState(() => _stage = _RecoveryStage.success);
     } catch (error) {
       if (mounted) setState(() => _errorMessage = _messageFrom(error));
     } finally {
@@ -104,7 +179,8 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
   Widget _buildStage() {
     return switch (_stage) {
       _RecoveryStage.enterDetails => _buildDetailsStage(),
-      _RecoveryStage.emailSent => _buildEmailSentStage(),
+      _RecoveryStage.verifyOtp => _buildOtpStage(),
+      _RecoveryStage.success => _buildSuccessStage(),
     };
   }
 
@@ -160,7 +236,7 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
       children: [
         _heading(
           'Get back on the move',
-          'Receive a secure password reset link at your college email address.',
+          'Receive a six-digit password recovery code at your college email address.',
           Icons.lock_reset_rounded,
         ),
         const SizedBox(height: 24),
@@ -200,21 +276,94 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
         ],
         const SizedBox(height: 20),
         _primaryButton(
-          label: 'Send reset link',
+          label: 'Send recovery code',
           onPressed: _requestRecovery,
         ),
       ],
     ),
   );
 
-  Widget _buildEmailSentStage() => _panel(
+  Widget _buildOtpStage() => _panel(
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         _heading(
-          'Recovery request accepted',
-          'Delivery is not confirmed. If an account exists and email delivery succeeds, a reset link will arrive. The link expires after 15 minutes.',
+          'Check your college email',
+          'If this email is registered, a code has been sent. Check your spam folder too. The code expires in 10 minutes.',
           Icons.mark_email_read_outlined,
+        ),
+        const SizedBox(height: 20),
+        TextField(
+          controller: _otpController,
+          keyboardType: TextInputType.number,
+          textInputAction: TextInputAction.next,
+          inputFormatters: [
+            FilteringTextInputFormatter.digitsOnly,
+            LengthLimitingTextInputFormatter(6),
+          ],
+          textAlign: TextAlign.center,
+          style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w700, letterSpacing: 6),
+          decoration: InputDecoration(
+            labelText: 'Six-digit recovery code',
+            hintText: '••••••',
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
+          ),
+        ),
+        const SizedBox(height: 12),
+        TextField(
+          controller: _passwordController,
+          obscureText: _obscurePassword,
+          textInputAction: TextInputAction.next,
+          decoration: InputDecoration(
+            labelText: 'New password',
+            helperText: '8 to 128 characters',
+            suffixIcon: IconButton(
+              tooltip: _obscurePassword ? 'Show password' : 'Hide password',
+              onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
+              icon: Icon(_obscurePassword ? Icons.visibility_off : Icons.visibility),
+            ),
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
+          ),
+        ),
+        const SizedBox(height: 12),
+        TextField(
+          controller: _confirmController,
+          obscureText: _obscureConfirmation,
+          textInputAction: TextInputAction.done,
+          onSubmitted: (_) => _verifyCode(),
+          decoration: InputDecoration(
+            labelText: 'Confirm new password',
+            suffixIcon: IconButton(
+              tooltip: _obscureConfirmation ? 'Show password' : 'Hide password',
+              onPressed: () => setState(() => _obscureConfirmation = !_obscureConfirmation),
+              icon: Icon(_obscureConfirmation ? Icons.visibility_off : Icons.visibility),
+            ),
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
+          ),
+        ),
+        if (_errorMessage != null) ...[
+          const SizedBox(height: 12),
+          _errorBanner(),
+        ],
+        const SizedBox(height: 16),
+        _primaryButton(label: 'Verify code and update password', onPressed: _verifyCode),
+        const SizedBox(height: 8),
+        TextButton(
+          onPressed: _isLoading || _resendSeconds > 0 ? null : _resendCode,
+          child: Text(_resendSeconds > 0 ? 'Resend code in ${_resendSeconds}s' : 'Resend code'),
+        ),
+      ],
+    ),
+  );
+
+  Widget _buildSuccessStage() => _panel(
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _heading(
+          'Password updated',
+          'Your password has been reset successfully. Please sign in with your new password.',
+          Icons.check_circle_outline_rounded,
         ),
         const SizedBox(height: 24),
         _primaryButton(label: 'Back to login', onPressed: _backToLogin),

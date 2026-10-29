@@ -5,7 +5,7 @@ const EventEmitter = require('events');
 const bcrypt = require('bcryptjs');
 const { Pool } = require('pg');
 const { campusDateKey, isDateOnly, matchesCampusDate } = require('./campus_time');
-const { mailProvider, mailConfigurationIssue, sendMail } = require('./mailer');
+const { recoveryEmailProvider } = require('./recovery_email');
 const { smsProvider, sendSms } = require('./sms');
 const { createRegistrationMobileRouter } = require('./registration_mobile');
 const { localMockDeliveryEnabled, takeLocalMessages } = require('./local_delivery');
@@ -39,7 +39,7 @@ require('dotenv').config({
     quiet: true,
 });
 
-if (mailConfigurationIssue(process.env) || !mailProvider(process.env)) {
+if (!recoveryEmailProvider(process.env)) {
     console.error('Password recovery email is disabled: mail provider configuration is incomplete.');
 }
 
@@ -1217,12 +1217,15 @@ app.get('/reset-password', (_req, res) => {
 </html>`);
 });
 
+const emailPasswordRecoveryRouter = createEmailPasswordRecoveryRouter({
+    getPool: () => pool,
+    env: process.env,
+});
+app.use('/api/auth', emailPasswordRecoveryRouter);
+
 app.use('/api/auth', createPasswordRecoveryRouter({
     store: passwordRecoveryStore,
     sessionStore,
-    emailConfigurationIssue: () => mailConfigurationIssue(process.env),
-    emailConfigured: () => Boolean(mailProvider(process.env)),
-    sendMail,
     smsConfigured: () => Boolean(smsProvider(process.env)),
     sendSms,
     otpSecret: () => process.env.PASSWORD_RESET_OTP_SECRET || API_SECRET_KEY,
@@ -1231,16 +1234,25 @@ app.use('/api/auth', createPasswordRecoveryRouter({
     production: process.env.NODE_ENV === 'production',
 }));
 
-const emailPasswordRecoveryRouter = createEmailPasswordRecoveryRouter({
-    getPool: () => pool,
-    env: process.env,
-    sendMail,
-    emailConfigured: () => Boolean(mailProvider(process.env)),
+// Compatibility aliases use the same email OTP handler as /api/auth/forgot-password.
+app.post('/forgot-password', (req, res, next) => {
+    req.url = '/forgot-password';
+    emailPasswordRecoveryRouter(req, res, next);
 });
-app.use('/api/auth', emailPasswordRecoveryRouter);
-// Compatibility for older app builds still posting to the original root URL.
+app.post('/password-recovery/request', (req, res, next) => {
+    req.url = '/password-recovery/request';
+    emailPasswordRecoveryRouter(req, res, next);
+});
 app.post('/request', (req, res, next) => {
     req.url = '/password-recovery/request';
+    emailPasswordRecoveryRouter(req, res, next);
+});
+app.post('/password-recovery/verify', (req, res, next) => {
+    req.url = '/password-recovery/verify';
+    emailPasswordRecoveryRouter(req, res, next);
+});
+app.post('/verify', (req, res, next) => {
+    req.url = '/password-recovery/verify';
     emailPasswordRecoveryRouter(req, res, next);
 });
 
