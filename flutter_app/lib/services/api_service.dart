@@ -347,11 +347,10 @@ class ApiService {
       requestPasswordRecovery(method: 'email', destination: email);
 
   Future<String> requestEmailPasswordRecovery(String email) async {
-    final data = await _postRecoveryJson('/auth/password-recovery/request', {
-      'email': email.trim().toLowerCase(),
-    });
-    return data['message']?.toString() ??
-        'If this email is registered, a code has been sent.';
+    return requestPasswordRecovery(
+      method: 'email',
+      destination: email,
+    );
   }
 
   Future<void> verifyEmailPasswordRecovery({

@@ -213,7 +213,7 @@ void main() {
       find.byType(TextField).at(0),
       'caretaker-bh1@nitmz.ac.in',
     );
-    await tester.tap(find.text('Send recovery code'));
+    await tester.tap(find.text('Send reset link'));
     await tester.pump();
 
     expect(
@@ -232,12 +232,13 @@ void main() {
     await tester.pumpAndSettle();
 
     await tester.enterText(find.byType(TextField), 'student@nitmz.ac.in');
-    await tester.tap(find.text('Send recovery code'));
+    await tester.tap(find.text('Send reset link'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 250));
 
+    expect(api.requestedMethod, 'email');
     expect(api.requestedDestination, 'student@nitmz.ac.in');
-    expect(find.text('Check your college email'), findsOneWidget);
+    expect(find.text('Recovery request accepted'), findsOneWidget);
     expect(find.text('Mobile OTP'), findsNothing);
   });
 
@@ -252,7 +253,7 @@ void main() {
       find.byType(TextField).at(0),
       'caretaker-bh1@nitmz.ac.in',
     );
-    await tester.tap(find.text('Send recovery code'));
+    await tester.tap(find.text('Send reset link'));
     await tester.pump();
     await tester.tap(find.byType(FilledButton).first, warnIfMissed: false);
     await tester.pump();
@@ -261,7 +262,7 @@ void main() {
     api.recoveryCompleter!.complete('Recovery queued');
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 250));
-    expect(find.text('Check your college email'), findsOneWidget);
+    expect(find.text('Recovery request accepted'), findsOneWidget);
   });
 
   testWidgets(
@@ -279,7 +280,7 @@ void main() {
         find.byType(TextField).at(0),
         'caretaker-bh1@nitmz.ac.in',
       );
-      await tester.tap(find.text('Send recovery code'));
+      await tester.tap(find.text('Send reset link'));
       await tester.pump();
 
       expect(
@@ -293,7 +294,7 @@ void main() {
     },
   );
 
-  testWidgets('college email OTP recovery resets password and returns to login', (
+  testWidgets('college email recovery directs user to the reset link', (
     tester,
   ) async {
     final api = _RecoveryApi();
@@ -305,26 +306,16 @@ void main() {
       find.byType(TextField).at(0),
       'caretaker-bh1@nitmz.ac.in',
     );
-    await tester.tap(find.text('Send recovery code'));
+    await tester.tap(find.text('Send reset link'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 250));
-    expect(find.text('Check your college email'), findsOneWidget);
-    await tester.enterText(find.byType(TextField).at(0), '123456');
-    await tester.enterText(find.byType(TextField).at(1), 'NewPassword123');
-    await tester.enterText(find.byType(TextField).at(2), 'NewPassword123');
-    await tester.tap(find.text('Verify code and update password'));
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 250));
-
-    expect(api.emailOtp, '123456');
-    expect(api.verifiedEmail, 'caretaker-bh1@nitmz.ac.in');
-    expect(api.newPassword, 'NewPassword123');
+    expect(find.text('Recovery request accepted'), findsOneWidget);
     expect(
-      find.text(
-        'Your password has been reset successfully. Please log in using your new password.',
-      ),
+      find.textContaining('reset link will arrive'),
       findsOneWidget,
     );
+    expect(api.requestedMethod, 'email');
+    expect(api.requestedDestination, 'caretaker-bh1@nitmz.ac.in');
     await tester.tap(find.text('Back to login'));
     await tester.pumpAndSettle();
     expect(find.text('Sign in'), findsOneWidget);
