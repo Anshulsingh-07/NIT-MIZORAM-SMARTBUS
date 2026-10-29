@@ -8,7 +8,7 @@ const { campusDateKey, isDateOnly, matchesCampusDate } = require('./campus_time'
 const { recoveryEmailProvider } = require('./recovery_email');
 const { smsProvider, sendSms } = require('./sms');
 const { createRegistrationMobileRouter } = require('./registration_mobile');
-const { createStudentRegistrationRouter } = require('./student_registration');
+const { assertStudentRegistrationPool, mountStudentRegistrationRoute } = require('./student_registration');
 const { localMockDeliveryEnabled, takeLocalMessages } = require('./local_delivery');
 const {
     canAccessDuringPasswordChange,
@@ -448,6 +448,7 @@ async function initializeDatabase() {
         keepAlive: true,
     };
     pool = new Pool(poolConfig);
+    assertStudentRegistrationPool(pool);
     pool.on('error', (error) => {
         console.error(`PostgreSQL idle pool client error (${safeDatabaseErrorCode(error)})`);
     });
@@ -797,14 +798,14 @@ app.get('/api/hostels', async (_req, res) => {
 });
 
 app.use('/api/auth/registration-mobile', createRegistrationMobileRouter());
-app.use('/api/auth', createStudentRegistrationRouter({
-    pool,
+mountStudentRegistrationRoute(app, {
+    getPool: () => pool,
     rateLimiter: registrationRateLimiter,
     hostels: hostelsSeed,
     emailPattern: COLLEGE_STUDENT_EMAIL,
     createToken,
     makeId: uid,
-}));
+});
 
 app.post('/api/auth/logout', async (req, res) => {
     const auth = requireAuth(req, res); if (!auth) return;

@@ -6,7 +6,10 @@ const { once } = require('node:events');
 const bcrypt = require('bcryptjs');
 const express = require('express');
 const { createRegistrationMobileRouter } = require('../registration_mobile');
-const { createStudentRegistrationRouter } = require('../student_registration');
+const {
+    createStudentRegistrationRouter,
+    mountStudentRegistrationRoute,
+} = require('../student_registration');
 
 const studentEmail = 'bt24zz123@nitmz.ac.in';
 const registrationBody = (overrides = {}) => ({
@@ -28,6 +31,7 @@ async function createHarness({
 } = {}) {
     let insertValues = null;
     let rateLimitHits = 0;
+    let poolConnectCalls = 0;
     const statements = [];
     const logs = [];
     const client = {
@@ -48,14 +52,15 @@ async function createHarness({
     const pool = {
         connect: async () => {
             if (errorAt === 'connect') throw error;
+            poolConnectCalls++;
             return client;
         },
     };
     const app = express();
     app.use(express.json());
     app.use('/api/auth/registration-mobile', createRegistrationMobileRouter());
-    app.use('/api/auth', createStudentRegistrationRouter({
-        pool,
+    mountStudentRegistrationRoute(app, {
+        getPool: () => pool,
         rateLimiter: (_req, res, next) => {
             rateLimitHits++;
             if (limiterStatus) return res.status(limiterStatus).json({ error: 'Rate limited' });
@@ -73,7 +78,7 @@ async function createHarness({
             return bcrypt.hash(password, cost);
         },
         logger: { error: (...args) => logs.push(args) },
-    }));
+    });
     const server = app.listen(0, '127.0.0.1');
     await once(server, 'listening');
     return {
@@ -81,6 +86,7 @@ async function createHarness({
         logs,
         get insertValues() { return insertValues; },
         get rateLimitHits() { return rateLimitHits; },
+        get poolConnectCalls() { return poolConnectCalls; },
         request: async (path, body = {}) => {
             const response = await fetch(`http://127.0.0.1:${server.address().port}/api/auth${path}`, {
                 method: 'POST',
@@ -111,6 +117,16 @@ test('registration creates an account directly without an OTP token', async (t) 
     assert.match(harness.statements.find((sql) => sql.startsWith('INSERT INTO users')), /recovery_phone_verified_at/);
     assert.match(harness.statements.find((sql) => sql.startsWith('INSERT INTO users')), /VALUES \(\$1, \$2, \$3, \$4, 'student', \$5, \$6, \$7, NULL, false\)/);
     assert.equal(harness.rateLimitHits, 1);
+    assert.equal(harness.poolConnectCalls, 1);
+});
+
+test('registration router refuses to mount without a pool dependency', () => {
+    assert.throws(() => createStudentRegistrationRouter({
+        rateLimiter: (_req, _res, next) => next(),
+        hostels: [],
+        createToken: async () => 'unused',
+        makeId: () => 'unused',
+    }), /must be mounted with a PostgreSQL pool or getPool provider/);
 });
 
 test('registration rejects a case-insensitive duplicate email', async (t) => {

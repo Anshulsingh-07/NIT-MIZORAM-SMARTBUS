@@ -25,8 +25,16 @@ function isConnectionError(code) {
         (typeof code === 'string' && /^08[A-Z0-9]{3}$/.test(code));
 }
 
+function assertStudentRegistrationPool(pool) {
+    if (!pool || typeof pool.connect !== 'function') {
+        throw new Error('Student registration requires a PostgreSQL pool with connect()');
+    }
+    return pool;
+}
+
 function createStudentRegistrationRouter({
     pool,
+    getPool,
     rateLimiter,
     hostels,
     emailPattern = EMAIL_PATTERN,
@@ -35,6 +43,11 @@ function createStudentRegistrationRouter({
     hashPassword = (password, cost) => bcrypt.hash(password, cost),
     logger = console,
 }) {
+    if (!pool && typeof getPool !== 'function') {
+        throw new Error('Student registration router must be mounted with a PostgreSQL pool or getPool provider');
+    }
+    if (pool) assertStudentRegistrationPool(pool);
+
     const router = express.Router();
 
     router.post('/register', rateLimiter, async (req, res) => {
@@ -74,7 +87,8 @@ function createStudentRegistrationRouter({
             sensitiveValues.push(passwordHash);
 
             step = 'insert';
-            client = await pool.connect();
+            const activePool = assertStudentRegistrationPool(typeof getPool === 'function' ? getPool() : pool);
+            client = await activePool.connect();
             await client.query('BEGIN');
             const existing = await client.query(
                 'SELECT id FROM users WHERE LOWER(email) = LOWER($1) LIMIT 1 FOR UPDATE',
@@ -148,4 +162,15 @@ function createStudentRegistrationRouter({
     return router;
 }
 
-module.exports = { createStudentRegistrationRouter, isConnectionError };
+function mountStudentRegistrationRoute(app, dependencies) {
+    const router = createStudentRegistrationRouter(dependencies);
+    app.use('/api/auth', router);
+    return router;
+}
+
+module.exports = {
+    assertStudentRegistrationPool,
+    createStudentRegistrationRouter,
+    isConnectionError,
+    mountStudentRegistrationRoute,
+};

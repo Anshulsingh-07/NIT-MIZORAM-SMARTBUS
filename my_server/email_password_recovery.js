@@ -9,6 +9,9 @@ const GENERIC_MESSAGE = 'If this email is registered, a code has been sent. Chec
 const INVALID_MESSAGE = 'Invalid or expired code';
 
 function createEmailPasswordRecoveryRouter({ getPool, env = process.env, logger = console, fetchImpl = globalThis.fetch, timeoutMs = 15000, clock = Date.now }) {
+    if (typeof getPool !== 'function') {
+        throw new Error('Password recovery router must be mounted with a PostgreSQL pool provider');
+    }
     const router = express.Router();
     const emailRequests = new Map();
     const ipRequests = new Map();

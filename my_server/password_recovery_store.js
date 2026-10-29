@@ -3,6 +3,9 @@
 const crypto = require('crypto');
 
 function createPasswordRecoveryStore(getPool) {
+    if (typeof getPool !== 'function') {
+        throw new Error('Password recovery store requires a PostgreSQL pool provider');
+    }
     const getClient = async () => getPool().connect();
 
     async function transaction(operation) {
