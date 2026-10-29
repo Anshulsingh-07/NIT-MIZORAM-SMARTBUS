@@ -145,7 +145,7 @@ test('shared caretaker mobile OTP is account-bound and one-time', {
     assert.equal(reused.status, 400);
 });
 
-test('student registration requires mobile verification and matching passwords', {
+test('student registration creates account without OTP and validates matching passwords', {
     skip: !integrationEnabled,
 }, async (t) => {
     const { baseUrl } = await startLocalApi(t);
@@ -153,20 +153,6 @@ test('student registration requires mobile verification and matching passwords',
     const year = String(crypto.randomInt(20, 100));
     const email = `bt${year}qa${suffix}@nitmz.ac.in`;
     const mobile = `9${crypto.randomInt(100000000, 1000000000)}`;
-    const otpRequest = await requestJson(`${baseUrl}/auth/registration-mobile/request`, {
-        email,
-        mobile,
-    });
-    assert.equal(otpRequest.status, 200);
-    const message = await capturedSms(baseUrl);
-    const otp = message.match(/code is (\d{6})/)[1];
-    const verification = await requestJson(`${baseUrl}/auth/registration-mobile/verify`, {
-        email,
-        mobile,
-        otp,
-    });
-    assert.equal(verification.status, 200);
-
     const registration = {
         name: 'Local Integration Student',
         email,
@@ -174,7 +160,6 @@ test('student registration requires mobile verification and matching passwords',
         password: 'local-Test-234',
         confirmPassword: 'different-Test-234',
         hostelId: 'BH1',
-        mobileVerificationToken: verification.data.verificationToken,
     };
     const mismatch = await requestJson(`${baseUrl}/auth/register`, registration);
     assert.equal(mismatch.status, 400);

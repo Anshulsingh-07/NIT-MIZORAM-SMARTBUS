@@ -293,7 +293,6 @@ class AuthService extends ChangeNotifier {
     String password,
     String confirmPassword,
     String hostelId,
-    String mobileVerificationToken,
     ApiService api,
   ) async {
     _isLoading = true;
@@ -308,7 +307,6 @@ class AuthService extends ChangeNotifier {
         password,
         confirmPassword,
         hostelId,
-        mobileVerificationToken,
       );
       final userJson = data['user'] as Map<String, dynamic>;
       userJson['token'] = data['token'];

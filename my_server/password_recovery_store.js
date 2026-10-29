@@ -25,7 +25,6 @@ function createPasswordRecoveryStore(getPool) {
             const pool = getPool();
             await pool.query('DELETE FROM password_resets WHERE expires_at <= NOW() OR used_at IS NOT NULL');
             await pool.query('DELETE FROM password_reset_otps WHERE expires_at <= NOW() OR used_at IS NOT NULL');
-            await pool.query('DELETE FROM registration_mobile_verifications WHERE expires_at <= NOW() OR used_at IS NOT NULL');
         },
 
         async findUserByEmail(email) {
@@ -156,77 +155,6 @@ function createPasswordRecoveryStore(getPool) {
             });
         },
 
-        async createRegistrationMobileChallenge(email, mobile, otpHash, expiresAt, cooldownMs) {
-            const result = await getPool().query(
-                `INSERT INTO registration_mobile_verifications
-                    (id, email, mobile, otp_hash, expires_at)
-                 VALUES ($1, $2, $3, $4, $5)
-                 ON CONFLICT (email, mobile) DO UPDATE SET
-                    id = EXCLUDED.id,
-                    otp_hash = EXCLUDED.otp_hash,
-                    attempts = 0,
-                    verification_token_hash = NULL,
-                    expires_at = EXCLUDED.expires_at,
-                    verified_at = NULL,
-                    used_at = NULL,
-                    created_at = NOW()
-                 WHERE registration_mobile_verifications.created_at <= NOW() - ($6 * INTERVAL '1 millisecond')
-                 RETURNING id`,
-                [crypto.randomUUID(), email, mobile, otpHash, expiresAt, cooldownMs],
-            );
-            return result.rows.length === 1;
-        },
-
-        async invalidateRegistrationMobileChallenge(email, mobile) {
-            await getPool().query(
-                `UPDATE registration_mobile_verifications SET used_at = NOW()
-                 WHERE email = $1 AND mobile = $2 AND used_at IS NULL`,
-                [email, mobile],
-            );
-        },
-
-        async verifyRegistrationMobileChallenge(email, mobile, candidateOtpHash, verificationTokenHash, tokenExpiresAt) {
-            return transaction(async (client) => {
-                const result = await client.query(
-                    `SELECT id, otp_hash, attempts FROM registration_mobile_verifications
-                     WHERE email = $1 AND mobile = $2 AND used_at IS NULL
-                       AND verified_at IS NULL AND expires_at > NOW()
-                     LIMIT 1 FOR UPDATE`,
-                    [email, mobile],
-                );
-                const challenge = result.rows[0];
-                if (!challenge || Number(challenge.attempts) >= 5) return false;
-                const storedHash = Buffer.from(String(challenge.otp_hash).trim(), 'hex');
-                const submittedHash = Buffer.from(candidateOtpHash, 'hex');
-                const matches = storedHash.length === submittedHash.length &&
-                    crypto.timingSafeEqual(storedHash, submittedHash);
-                if (!matches) {
-                    await client.query(
-                        'UPDATE registration_mobile_verifications SET attempts = attempts + 1 WHERE id = $1',
-                        [challenge.id],
-                    );
-                    return false;
-                }
-                await client.query(
-                    `UPDATE registration_mobile_verifications
-                     SET verified_at = NOW(), verification_token_hash = $1, expires_at = $2
-                     WHERE id = $3`,
-                    [verificationTokenHash, tokenExpiresAt, challenge.id],
-                );
-                return true;
-            });
-        },
-
-        async consumeRegistrationMobileVerification(client, email, mobile, tokenHash) {
-            const result = await client.query(
-                `UPDATE registration_mobile_verifications SET used_at = NOW()
-                 WHERE email = $1 AND mobile = $2 AND verification_token_hash = $3
-                   AND verified_at IS NOT NULL AND used_at IS NULL AND expires_at > NOW()
-                 RETURNING id`,
-                [email, mobile, tokenHash],
-            );
-            return result.rows.length === 1;
-        },
     };
 }
 

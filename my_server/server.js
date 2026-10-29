@@ -8,6 +8,7 @@ const { campusDateKey, isDateOnly, matchesCampusDate } = require('./campus_time'
 const { recoveryEmailProvider } = require('./recovery_email');
 const { smsProvider, sendSms } = require('./sms');
 const { createRegistrationMobileRouter } = require('./registration_mobile');
+const { createStudentRegistrationRouter } = require('./student_registration');
 const { localMockDeliveryEnabled, takeLocalMessages } = require('./local_delivery');
 const {
     canAccessDuringPasswordChange,
@@ -17,7 +18,7 @@ const {
     compareDriverPin,
 } = require('./auth_credentials');
 const { createLoginAttemptStore, hashLoginIdentifier } = require('./login_attempts');
-const { createPasswordRecoveryRouter, digest, normalizeMobile } = require('./password_recovery');
+const { createPasswordRecoveryRouter } = require('./password_recovery');
 const { createEmailPasswordRecoveryRouter } = require('./email_password_recovery');
 const { createPasswordRecoveryStore } = require('./password_recovery_store');
 const { fingerprintDatabaseIdentity } = require('./database_identity');
@@ -795,85 +796,15 @@ app.get('/api/hostels', async (_req, res) => {
     }
 });
 
-app.use('/api/auth/registration-mobile', createRegistrationMobileRouter({
-    store: passwordRecoveryStore,
-    smsConfigured: () => Boolean(smsProvider(process.env)),
-    sendSms,
-    otpSecret: () => process.env.PASSWORD_RESET_OTP_SECRET || API_SECRET_KEY,
+app.use('/api/auth/registration-mobile', createRegistrationMobileRouter());
+app.use('/api/auth', createStudentRegistrationRouter({
+    pool,
+    rateLimiter: registrationRateLimiter,
+    hostels: hostelsSeed,
+    emailPattern: COLLEGE_STUDENT_EMAIL,
+    createToken,
+    makeId: uid,
 }));
-
-app.post('/api/auth/register', registrationRateLimiter, async (req, res) => {
-    const { name, email, mobile, password, confirmPassword, hostelId, mobileVerificationToken } = req.body || {};
-    const normalizedName = String(name || '').trim();
-    const normalizedEmail = String(email || '').trim().toLowerCase();
-    const normalizedMobile = normalizeMobile(mobile);
-    const selectedHostel = String(hostelId || '').trim().toUpperCase();
-    const verificationToken = String(mobileVerificationToken || '');
-    const clearPassword = String(password || '');
-    const clearConfirmation = String(confirmPassword || '');
-
-    if (!normalizedName || normalizedName.length > 100 ||
-        !COLLEGE_STUDENT_EMAIL.test(normalizedEmail) || !normalizedMobile ||
-        clearPassword.length < 9 || clearPassword.length > 128 || clearPassword !== clearConfirmation ||
-        !/^[a-f0-9]{64}$/i.test(verificationToken)) {
-        return res.status(400).json({ error: 'Complete all fields and verify your mobile number.' });
-    }
-    if (!hostelsSeed.some((hostel) => hostel.id === selectedHostel)) {
-        return res.status(400).json({ error: 'Select a valid hostel.' });
-    }
-
-    let client;
-    try {
-        const passwordHash = await bcrypt.hash(clearPassword, 12);
-        client = await pool.connect();
-        await client.query('BEGIN');
-        const existing = await client.query(
-            'SELECT id FROM users WHERE LOWER(email) = LOWER($1) LIMIT 1 FOR UPDATE',
-            [normalizedEmail],
-        );
-        if (existing.rows.length) {
-            await client.query('ROLLBACK');
-            return res.status(409).json({ error: 'This email is already registered — log in instead.' });
-        }
-        const consumed = await passwordRecoveryStore.consumeRegistrationMobileVerification(
-            client,
-            normalizedEmail,
-            normalizedMobile,
-            digest(verificationToken),
-        );
-        if (!consumed) {
-            await client.query('ROLLBACK');
-            return res.status(400).json({ error: 'Mobile verification expired. Verify your number again.' });
-        }
-
-        const user = {
-            id: uid('usr_'),
-            name: normalizedName,
-            email: normalizedEmail,
-            role: 'student',
-            hostel_id: selectedHostel,
-            must_change_password: false,
-        };
-        await client.query(
-            `INSERT INTO users
-                (id, name, email, password, role, hostel_id, recovery_phone, recovery_phone_verified_at, must_change_password)
-             VALUES ($1, $2, $3, $4, 'student', $5, $6, NOW(), false)`,
-            [user.id, user.name, user.email, passwordHash, user.hostel_id, normalizedMobile],
-        );
-        await client.query('COMMIT');
-        const token = await createToken(user);
-        return res.status(201).json({ token, user: publicUser(user) });
-    } catch (error) {
-        if (client) await client.query('ROLLBACK').catch(() => {});
-        if (error.code === '23505') {
-            return res.status(409).json({ error: 'This email or verified mobile is already registered.' });
-        }
-        console.error(`Student registration failed (${typeof error.code === 'string' ? error.code : 'database_error'}).`);
-        return internalError(res, error, 'student registration');
-    } finally {
-        client?.release();
-    }
-});
 
 app.post('/api/auth/logout', async (req, res) => {
     const auth = requireAuth(req, res); if (!auth) return;

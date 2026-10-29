@@ -30,12 +30,7 @@ class _LoginScreenState extends State<LoginScreen>
   bool _isRegister = false;
   final _nameCtrl = TextEditingController();
   final _mobileCtrl = TextEditingController();
-  final _registrationOtpCtrl = TextEditingController();
   final _confirmPassCtrl = TextEditingController();
-  String? _mobileVerificationToken;
-  bool _registrationOtpSent = false;
-  bool _isSendingRegistrationOtp = false;
-  bool _isVerifyingRegistrationOtp = false;
   String _selectedHostel = 'BH1';
   late AnimationController _animCtrl;
   late Animation<Offset> _slideAnim;
@@ -51,8 +46,6 @@ class _LoginScreenState extends State<LoginScreen>
       begin: const Offset(0, 0.1),
       end: Offset.zero,
     ).animate(CurvedAnimation(parent: _animCtrl, curve: Curves.easeOut));
-    _emailCtrl.addListener(_invalidateRegistrationMobileVerification);
-    _mobileCtrl.addListener(_invalidateRegistrationMobileVerification);
     _animCtrl.forward();
   }
 
@@ -62,7 +55,6 @@ class _LoginScreenState extends State<LoginScreen>
     _passCtrl.dispose();
     _nameCtrl.dispose();
     _mobileCtrl.dispose();
-    _registrationOtpCtrl.dispose();
     _confirmPassCtrl.dispose();
     _phoneCtrl.dispose();
     _pinCtrl.dispose();
@@ -75,12 +67,9 @@ class _LoginScreenState extends State<LoginScreen>
       _driverMode = false;
       _isAdmin = isAdmin;
       _isRegister = false;
-      _mobileVerificationToken = null;
-      _registrationOtpSent = false;
       _emailCtrl.clear();
       _passCtrl.clear();
       _mobileCtrl.clear();
-      _registrationOtpCtrl.clear();
       _confirmPassCtrl.clear();
       _rememberCaretakerEmail = false;
     });
@@ -137,27 +126,26 @@ class _LoginScreenState extends State<LoginScreen>
       final mobile = _mobileCtrl.text.trim();
       final password = _passCtrl.text;
       if (_nameCtrl.text.trim().isEmpty ||
-          !RegExp(r'^[^\s@]+@nitmz\.ac\.in$', caseSensitive: false)
-              .hasMatch(email)) {
+          !RegExp(
+            r'^bt\d{2}[a-z]{2}\d{3}@nitmz\.ac\.in$',
+            caseSensitive: false,
+          ).hasMatch(email)) {
         auth.setError('Enter your full name and registered college email.');
         return;
       }
-      if (!RegExp(r'^(?:\+?91[ -]?)?[6-9]\d{9}$')
-          .hasMatch(mobile.replaceAll(RegExp(r'[()\s-]'), ''))) {
-        auth.setError('Enter a valid 10-digit Indian mobile number.');
+      if (mobile.isNotEmpty &&
+          !RegExp(
+            r'^(?:\+?91[ -]?)?[6-9]\d{9}$',
+          ).hasMatch(mobile.replaceAll(RegExp(r'[()\s-]'), ''))) {
+        auth.setError('Enter a valid Indian mobile number or leave it blank.');
         return;
       }
-      if (password.length < 9 || password.length > 128) {
-        auth.setError('Use a password between 9 and 128 characters.');
+      if (password.length < 8 || password.length > 128) {
+        auth.setError('Use a password between 8 and 128 characters.');
         return;
       }
       if (password != _confirmPassCtrl.text) {
         auth.setError('The passwords do not match.');
-        return;
-      }
-      final verificationToken = _mobileVerificationToken;
-      if (verificationToken == null) {
-        auth.setError('Verify your mobile number before registering.');
         return;
       }
       final success = await auth.register(
@@ -167,7 +155,6 @@ class _LoginScreenState extends State<LoginScreen>
         password,
         _confirmPassCtrl.text,
         _selectedHostel,
-        verificationToken,
         api,
       );
       if (success && mounted) {
@@ -202,74 +189,6 @@ class _LoginScreenState extends State<LoginScreen>
               : const StudentHome(),
         ),
       );
-    }
-  }
-
-  void _invalidateRegistrationMobileVerification() {
-    if (_mobileVerificationToken == null && !_registrationOtpSent) return;
-    setState(() {
-      _mobileVerificationToken = null;
-      _registrationOtpSent = false;
-      _registrationOtpCtrl.clear();
-    });
-  }
-
-  Future<void> _requestRegistrationMobileOtp() async {
-    final email = _emailCtrl.text.trim();
-    final mobile = _mobileCtrl.text.trim();
-    if (!RegExp(r'^[^\s@]+@nitmz\.ac\.in$', caseSensitive: false)
-            .hasMatch(email) ||
-        !RegExp(r'^(?:\+?91[ -]?)?[6-9]\d{9}$')
-            .hasMatch(mobile.replaceAll(RegExp(r'[()\s-]'), ''))) {
-      context.read<AuthService>().setError(
-        'Enter a valid college email and mobile number first.',
-      );
-      return;
-    }
-    setState(() {
-      _isSendingRegistrationOtp = true;
-      _mobileVerificationToken = null;
-      _registrationOtpSent = false;
-      _registrationOtpCtrl.clear();
-    });
-    final auth = context.read<AuthService>();
-    auth.clearError();
-    try {
-      await context.read<ApiService>().requestRegistrationMobileOtp(
-        email,
-        mobile,
-      );
-      if (mounted) setState(() => _registrationOtpSent = true);
-    } catch (error) {
-      if (mounted) {
-        auth.setError(error.toString().replaceFirst('Exception: ', ''));
-      }
-    } finally {
-      if (mounted) setState(() => _isSendingRegistrationOtp = false);
-    }
-  }
-
-  Future<void> _verifyRegistrationMobileOtp() async {
-    if (!RegExp(r'^\d{6}$').hasMatch(_registrationOtpCtrl.text.trim())) {
-      context.read<AuthService>().setError('Enter the six-digit code.');
-      return;
-    }
-    final auth = context.read<AuthService>();
-    auth.clearError();
-    setState(() => _isVerifyingRegistrationOtp = true);
-    try {
-      final token = await context.read<ApiService>().verifyRegistrationMobileOtp(
-        _emailCtrl.text.trim(),
-        _mobileCtrl.text.trim(),
-        _registrationOtpCtrl.text.trim(),
-      );
-      if (mounted) setState(() => _mobileVerificationToken = token);
-    } catch (error) {
-      if (mounted) {
-        auth.setError(error.toString().replaceFirst('Exception: ', ''));
-      }
-    } finally {
-      if (mounted) setState(() => _isVerifyingRegistrationOtp = false);
     }
   }
 
@@ -411,69 +330,13 @@ class _LoginScreenState extends State<LoginScreen>
                           const SizedBox(height: 14),
                           if (_isRegister) ...[
                             _buildField(
-                              'Mobile Number',
+                              'Mobile Number (optional)',
                               Icons.phone,
                               _mobileCtrl,
                               inputType: TextInputType.phone,
+                              helperText:
+                                  'Enter an Indian number; format +91XXXXXXXXXX',
                             ),
-                            const SizedBox(height: 8),
-                            SizedBox(
-                              width: double.infinity,
-                              child: OutlinedButton.icon(
-                                onPressed: _isSendingRegistrationOtp
-                                    ? null
-                                    : _requestRegistrationMobileOtp,
-                                icon: _isSendingRegistrationOtp
-                                    ? const SizedBox(
-                                        width: 16,
-                                        height: 16,
-                                        child: CircularProgressIndicator(
-                                          strokeWidth: 2,
-                                        ),
-                                      )
-                                    : const Icon(Icons.sms_outlined),
-                                label: Text(
-                                  _registrationOtpSent
-                                      ? 'Resend verification code'
-                                      : 'Verify mobile number',
-                                ),
-                              ),
-                            ),
-                            if (_registrationOtpSent) ...[
-                              const SizedBox(height: 8),
-                              _buildField(
-                                'Six-digit verification code',
-                                Icons.pin_outlined,
-                                _registrationOtpCtrl,
-                                inputType: TextInputType.number,
-                              ),
-                              const SizedBox(height: 8),
-                              SizedBox(
-                                width: double.infinity,
-                                child: OutlinedButton.icon(
-                                  onPressed: _isVerifyingRegistrationOtp ||
-                                          _mobileVerificationToken != null
-                                      ? null
-                                      : _verifyRegistrationMobileOtp,
-                                  icon: _mobileVerificationToken != null
-                                      ? const Icon(Icons.verified_outlined)
-                                      : _isVerifyingRegistrationOtp
-                                      ? const SizedBox(
-                                          width: 16,
-                                          height: 16,
-                                          child: CircularProgressIndicator(
-                                            strokeWidth: 2,
-                                          ),
-                                        )
-                                      : const Icon(Icons.check_circle_outline),
-                                  label: Text(
-                                    _mobileVerificationToken != null
-                                        ? 'Mobile verified'
-                                        : 'Confirm code',
-                                  ),
-                                ),
-                              ),
-                            ],
                             const SizedBox(height: 14),
                           ],
                           _buildPasswordField(),
@@ -671,12 +534,14 @@ class _LoginScreenState extends State<LoginScreen>
     IconData icon,
     TextEditingController ctrl, {
     TextInputType inputType = TextInputType.text,
+    String? helperText,
   }) {
     return TextField(
       controller: ctrl,
       keyboardType: inputType,
       decoration: InputDecoration(
         labelText: label,
+        helperText: helperText,
         prefixIcon: Icon(icon, color: const Color(0xFF1565C0), size: 20),
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(12),
@@ -734,7 +599,11 @@ class _LoginScreenState extends State<LoginScreen>
       obscureText: _obscurePass,
       decoration: InputDecoration(
         labelText: 'Confirm password',
-        prefixIcon: const Icon(Icons.lock_outline, color: Color(0xFF1565C0), size: 20),
+        prefixIcon: const Icon(
+          Icons.lock_outline,
+          color: Color(0xFF1565C0),
+          size: 20,
+        ),
         border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
         focusedBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(12),
