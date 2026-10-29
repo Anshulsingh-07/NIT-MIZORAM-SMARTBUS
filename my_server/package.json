@@ -5,6 +5,7 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
+    "seed:accounts": "node scripts/seed-accounts.js",
     "device:key:create": "node scripts/create-device-key.js",
     "caretakers:provision": "node scripts/provision-caretakers.js",
     "test:auth": "node scripts/test-auth-local.js",

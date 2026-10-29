@@ -39,8 +39,9 @@ require('dotenv').config({
     quiet: true,
 });
 
-if (!process.env.RESEND_API_KEY) console.error('Password recovery email is disabled: RESEND_API_KEY is not configured.');
-if (!process.env.MAIL_FROM) console.error('Password recovery email is disabled: MAIL_FROM is not configured.');
+if (mailConfigurationIssue(process.env) || !mailProvider(process.env)) {
+    console.error('Password recovery email is disabled: mail provider configuration is incomplete.');
+}
 
 if (process.env.NODE_ENV === 'production' && process.env.ALLOW_LEGACY_API_KEY === 'true' && !process.env.API_SECRET_KEY) {
     throw new Error('API_SECRET_KEY must be configured in production');

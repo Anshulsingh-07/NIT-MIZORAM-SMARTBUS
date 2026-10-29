@@ -39,6 +39,12 @@ services:
         value: false
       - key: MAIL_FROM
         sync: false
+      - key: MAIL_PROVIDER
+        value: apps_script
+      - key: APPS_SCRIPT_URL
+        sync: false
+      - key: MAIL_SECRET
+        sync: false
       - key: BREVO_API_KEY
         sync: false
       - key: RESEND_API_KEY

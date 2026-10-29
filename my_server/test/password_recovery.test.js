@@ -13,6 +13,7 @@ const {
     normalizeMobile,
 } = require('../password_recovery');
 const { sendSms, smsProvider } = require('../sms');
+const { sendMail } = require('../mailer');
 
 const OTP_SECRET = 'unit-test-password-reset-secret-long-enough';
 const GENERIC = 'If an account exists and delivery is available, recovery instructions will be sent.';
@@ -145,6 +146,7 @@ async function createHarness(options = {}) {
         emailConfigured: () => options.emailConfigured ?? true,
         sendMail: async (message) => {
             mails.push(message);
+            if (options.sendMailImpl) await options.sendMailImpl(message);
             if (options.mailFailure) throw new Error('provider response included sensitive data');
         },
         smsConfigured: () => options.smsConfigured ?? true,
@@ -246,6 +248,44 @@ test('email recovery gives a generic response and sends a hashed 15-minute token
     assert.equal(harness.store.resets[0].tokenHash, digest(token));
     assert.equal(harness.store.resets[0].expiresAt - Date.now() < 15 * 60 * 1000, true);
     assert.equal(JSON.stringify(known.data).includes(token), false);
+});
+
+test('password recovery delivers its existing reset link through the Apps Script mailer', async (t) => {
+    const calls = [];
+    const harness = await createHarness({
+        sendMailImpl: (message) => sendMail(message, {
+            env: {
+                MAIL_PROVIDER: 'apps_script',
+                APPS_SCRIPT_URL: 'https://script.google.com/macros/s/deployment123/exec',
+                MAIL_SECRET: 'test-apps-script-secret',
+            },
+            fetchImpl: async (...args) => {
+                calls.push(args);
+                return {
+                    ok: true,
+                    status: 200,
+                    headers: { get: () => null },
+                    text: async () => 'OK',
+                };
+            },
+        }),
+    });
+    t.after(() => harness.close());
+
+    const response = await harness.request('forgot-password', {
+        method: 'email', email: 'caretaker-bh1@nitmz.ac.in',
+    });
+    await waitFor(() => calls.length === 1);
+    assert.equal(response.status, 202);
+    const payload = JSON.parse(calls[0][1].body);
+    assert.equal(payload.secret, 'test-apps-script-secret');
+    assert.equal(payload.to, 'caretaker-bh1@nitmz.ac.in');
+    assert.equal(payload.subject, 'SmartBus password reset');
+    assert.match(payload.text, /expires in 15 minutes/);
+    const token = new URL(payload.text.match(/https:\/\/\S+/)[0]).hash.slice('#token='.length);
+    assert.match(token, /^[a-f0-9]{64}$/);
+    assert.equal(harness.store.resets[0].tokenHash, digest(token));
+    assert.equal(JSON.stringify(response.data).includes(token), false);
 });
 
 test('email reset rejects invalid, expired, and already-used tokens; success updates password and invalidates sessions', async (t) => {
